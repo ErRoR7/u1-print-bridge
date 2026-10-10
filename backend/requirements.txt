@@ -1,0 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+python-multipart>=0.0.18,<1
+# test/dev only (also installed in CI); harmless in the image
+pytest>=8,<9
+numpy>=1.26,<3
+Pillow>=10,<12
