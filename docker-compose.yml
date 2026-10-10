@@ -1,0 +1,37 @@
+# U1 Print Bridge — Docker Compose
+#
+# IMPORTANT: DATA_DIR=/data must be set in .env. Both services persist job
+# state and slice artifacts on the printbridge-data volume mounted at /data,
+# so DATA_DIR has to point at that same mount.
+
+services:
+  api:
+    build: ./backend
+    image: u1-print-bridge-api
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - printbridge-data:/data
+      # The API serves the static frontend from /app/frontend (FRONTEND_DIR).
+      - ./frontend:/app/frontend:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  slicer:
+    build: ./slicer
+    image: u1-print-bridge-slicer
+    env_file:
+      - .env
+    volumes:
+      - printbridge-data:/data
+    restart: unless-stopped
+
+volumes:
+  printbridge-data:

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Print Bridge</title>
+<!-- Bump ?v= on every frontend release so browsers never mix old/new files. -->
+<link rel="stylesheet" href="styles.css?v=1.0.15">
+</head>
+<body>
+<header class="topbar">
+  <h1>Print Bridge</h1>
+  <div class="topbar-right">
+    <button id="theme-toggle" class="icon-btn" aria-label="Toggle light/dark theme">☀️</button>
+    <div class="health-wrap">
+      <button id="health-pill" class="pill" aria-label="Service status">Checking…</button>
+      <div id="health-popover" class="popover" hidden></div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="new-print" aria-label="Start a new print">
+    <h2>Start a new print</h2>
+
+    <div id="url-error" class="error" hidden></div>
+    <label class="field-label" for="url-input">Model link</label>
+    <div class="row">
+      <input id="url-input" type="url" inputmode="url" autocomplete="off"
+             placeholder="Paste a Printables or MakerWorld link">
+      <button id="print-btn" class="btn primary">Print</button>
+    </div>
+
+    <div class="divider" aria-hidden="true"><span>or</span></div>
+
+    <div class="row">
+      <label class="btn file-btn" for="file-input">Choose a 3MF file</label>
+      <span id="file-name" class="hint"></span>
+    </div>
+    <input id="file-input" type="file" accept=".3mf" hidden>
+    <p class="hint">Upload a 3MF you saved from MakerWorld or another site.</p>
+    <div id="upload-error" class="error" hidden></div>
+  </section>
+
+  <section class="card" id="spools-card" aria-label="Spools loaded">
+    <div class="section-head">
+      <h2>Spools loaded</h2>
+      <a id="manage-spools" href="#" target="_blank" rel="noopener">Manage spools →</a>
+    </div>
+    <div id="spool-strip" class="spool-strip"><p class="hint">Loading…</p></div>
+  </section>
+
+  <section class="card" id="camera-card" aria-label="Printer camera" hidden>
+    <div class="section-head">
+      <h2>Camera</h2>
+      <a id="cam-open" href="#" target="_blank" rel="noopener">Open stream →</a>
+    </div>
+    <img id="cam-img" alt="Live view of the printer bed" hidden>
+    <p class="hint" id="cam-note" hidden></p>
+  </section>
+
+  <section id="jobs-section" aria-label="Prints">
+    <h2 class="section-title">Prints</h2>
+    <div id="jobs-list"></div>
+    <p id="jobs-empty" class="hint">No prints yet — start one above.</p>
+  </section>
+</main>
+
+<div id="modal-backdrop" class="backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h2 id="modal-title">Check the colors</h2>
+    <p class="modal-sub" id="modal-job-title"></p>
+    <div id="modal-error" class="error" hidden></div>
+    <div id="modal-toolheads" class="spool-strip modal-toolheads"></div>
+    <div id="modal-slots"></div>
+    <div id="size-row">
+      <label class="field-label">Size <span class="hint" id="size-dims"></span></label>
+      <div class="row size-mode-row">
+        <div class="seg" id="scale-mode-seg" role="group" aria-label="Scale units">
+          <button type="button" class="seg-btn active" data-mode="pct">%</button>
+          <button type="button" class="seg-btn" data-mode="mm">mm</button>
+        </div>
+        <button type="button" id="scale-link" class="icon-btn" aria-label="Keep proportions locked" title="Keep proportions locked">🔗</button>
+      </div>
+      <div class="row scale-inputs">
+        <label class="scale-field">X<input id="scale-x" inputmode="decimal" value="100" aria-label="X scale"></label>
+        <label class="scale-field">Y<input id="scale-y" inputmode="decimal" value="100" aria-label="Y scale"></label>
+        <label class="scale-field">Z<input id="scale-z" inputmode="decimal" value="100" aria-label="Z scale"></label>
+      </div>
+      <p class="hint" id="scale-hint"></p>
+      <label class="field-label" for="copies-input">Copies</label>
+      <div class="row">
+        <input id="copies-input" type="number" min="1" max="25" value="1" inputmode="numeric">
+        <span class="hint" id="copies-hint"></span>
+      </div>
+    </div>
+    <div id="quality-row">
+      <label class="field-label" for="quality-select">Quality</label>
+      <div class="row">
+        <select id="quality-select"></select>
+      </div>
+      <label class="field-label" for="supports-select">Supports</label>
+      <div class="row">
+        <select id="supports-select">
+          <option value="model">As in the model file</option>
+          <option value="on">Force on (normal)</option>
+          <option value="off">Force off</option>
+          <option value="organic">Force on (organic/tree)</option>
+        </select>
+      </div>
+      <label class="check-row"><input type="checkbox" id="timelapse-check"> Record a timelapse of this print</label>
+    </div>
+    <div id="plate-row" hidden>
+      <label class="field-label" for="plate-select">Which part?</label>
+      <select id="plate-select"></select>
+    </div>
+    <div id="modal-preview"></div>
+    <p class="hint">Each color prints from the toolhead you pick below.
+       Make sure the right filament is loaded on that toolhead, then tap Start print.</p>
+    <div class="modal-actions">
+      <button id="confirm-start" class="btn primary big">Start print</button>
+      <button id="confirm-cancel" class="btn">Not yet</button>
+    </div>
+  </div>
+</div>
+
+<div id="file-backdrop" class="backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="file-picker-title">
+    <h2 id="file-picker-title">Which file?</h2>
+    <p class="modal-sub" id="file-title"></p>
+    <div id="file-list" class="file-list"></div>
+    <div class="modal-actions">
+      <button id="file-cancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=1.0.15"></script>
+</body>
+</html>
