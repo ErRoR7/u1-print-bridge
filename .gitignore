@@ -1,0 +1,25 @@
+# Environment — never commit real credentials.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+
+# Job data (contains sliced G-code, logs, thumbnails)
+/data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
