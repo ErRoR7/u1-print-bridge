@@ -71,7 +71,7 @@ top of the app). You get one entry per service:
   ntfy server is reachable. If `NTFY_TOPIC` is empty this shows as disabled
   (bridge alerts off — the app itself still works fine).
 
-## Amanda's phone setup
+## Phone setup
 
 Two free apps, about five minutes, one time:
 
