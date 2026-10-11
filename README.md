@@ -45,16 +45,37 @@ alongside — this compose file expects both directories to exist.
 
 ## Deploying on Unraid
 
-1. Install the **Docker Compose** plugin (if you don't already have it).
-2. Put this project on the Unraid box (e.g. under `/mnt/user/appdata/` or a
-   share), next to the `backend/` and `slicer/` directories.
-3. `cp .env.example .env` and edit `.env`:
-   - `PRINTER_URL` — Moonraker on the U1 (default `http://192.168.68.242:7125`).
-   - `SPOOLMAN_URL` — your Spoolman (default `http://192.168.68.84:7912`).
-   - `NTFY_TOPIC` — ntfy topic for bridge alerts on your phone
-     (default `u1-print-bridge`; subscribe in the ntfy app).
-4. `docker compose up -d --build`
-5. Open `http://<unraid-ip>:8080` on your phone (same Wi-Fi).
+Install the **Docker Compose** plugin first (one-time, via the Unraid web UI).
+
+**Fresh install** (your `.env` is created from the example; edit it after):
+
+```bash
+cd /mnt/user/appdata && \
+git clone https://github.com/ErRoR7/u1-print-bridge.git && \
+cd u1-print-bridge && \
+cp .env.example .env && \
+docker compose up -d --build
+```
+
+Key `.env` values:
+- `PRINTER_URL` — Moonraker on the U1 (default `http://192.168.68.242:7125`).
+- `SPOOLMAN_URL` — your Spoolman (default `http://192.168.68.84:7912`).
+- `NTFY_TOPIC` — ntfy topic for bridge alerts on your phone
+  (default `u1-print-bridge`; subscribe in the ntfy app).
+
+**Update to the latest from GitHub** (safe to re-run; your `.env` is kept):
+
+```bash
+cd /mnt/user/appdata && \
+cp u1-print-bridge/.env /tmp/pb-env.bak 2>/dev/null; \
+rm -rf u1-print-bridge && \
+git clone https://github.com/ErRoR7/u1-print-bridge.git && \
+cd u1-print-bridge && \
+(cp /tmp/pb-env.bak .env 2>/dev/null || cp .env.example .env) && \
+docker compose up -d --build
+```
+
+Then open `http://<unraid-ip>:8080` on your phone (same Wi-Fi).
 
 ## Self-test
 
