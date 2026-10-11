@@ -24,7 +24,7 @@ class Config:
     # Spoolman inventory (READ-ONLY for this bridge)
     SPOOLMAN_URL: str = _env("SPOOLMAN_URL", "http://192.168.68.84:7912")
     # ntfy push alerts; empty topic disables sending (health reports disabled)
-    NTFY_TOPIC: str = _env("NTFY_TOPIC", "")
+    NTFY_TOPIC: str = _env("NTFY_TOPIC", "u1-print-bridge")
     NTFY_SERVER: str = _env("NTFY_SERVER", "https://ntfy.sh")
     # Optional logged-in MakerWorld session cookie for best-effort downloads.
     # Never used to bypass login walls; absent cookie => manual-upload fallback.
@@ -41,7 +41,7 @@ class Config:
         """Re-read the environment (used by tests)."""
         cls.PRINTER_URL = _env("PRINTER_URL", "http://192.168.68.242:7125")
         cls.SPOOLMAN_URL = _env("SPOOLMAN_URL", "http://192.168.68.84:7912")
-        cls.NTFY_TOPIC = _env("NTFY_TOPIC", "")
+        cls.NTFY_TOPIC = _env("NTFY_TOPIC", "u1-print-bridge")
         cls.NTFY_SERVER = _env("NTFY_SERVER", "https://ntfy.sh")
         cls.MAKERWORLD_SESSION_COOKIE = _env("MAKERWORLD_SESSION_COOKIE", "")
         cls.DATA_DIR = _env("DATA_DIR", "/data")

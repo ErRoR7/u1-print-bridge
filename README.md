@@ -51,8 +51,8 @@ alongside — this compose file expects both directories to exist.
 3. `cp .env.example .env` and edit `.env`:
    - `PRINTER_URL` — Moonraker on the U1 (default `http://192.168.68.242:7125`).
    - `SPOOLMAN_URL` — your Spoolman (default `http://192.168.68.84:7912`).
-   - `NTFY_TOPIC` — set a topic name to get bridge alerts on your phone,
-     leave empty to disable.
+   - `NTFY_TOPIC` — ntfy topic for bridge alerts on your phone
+     (default `u1-print-bridge`; subscribe in the ntfy app).
 4. `docker compose up -d --build`
 5. Open `http://<unraid-ip>:8080` on your phone (same Wi-Fi).
 
@@ -69,7 +69,8 @@ top of the app). You get one entry per service:
   say "spool info unavailable" until this is green.
 - **ntfy (Alerts)** — green means bridge notifications are configured and the
   ntfy server is reachable. If `NTFY_TOPIC` is empty this shows as disabled
-  (bridge alerts off — the app itself still works fine).
+  (bridge alerts off — the app itself still works fine). It defaults to
+  `u1-print-bridge`.
 
 ## Phone setup
 
