@@ -85,12 +85,14 @@ and `ghcr.io/error7/u1-print-bridge-slicer`, tagged `latest` plus the
 `VERSION` from `backend/config.py`. The Unraid templates in `unraid/` point
 at those images, so updating is a one-click pull instead of a rebuild.
 
-**Install the templates** (one time):
+**Install the templates** (one time, straight from GitHub — no repo clone
+needed):
 
 ```bash
-cp /mnt/user/appdata/u1-print-bridge/unraid/u1-print-bridge-api.xml \
-   /mnt/user/appdata/u1-print-bridge/unraid/u1-print-bridge-slicer.xml \
-   /boot/config/plugins/dockerMan/templates-user/
+curl -fL -o /boot/config/plugins/dockerMan/templates-user/u1-print-bridge-api.xml \
+  https://raw.githubusercontent.com/ErRoR7/u1-print-bridge/main/unraid/u1-print-bridge-api.xml
+curl -fL -o /boot/config/plugins/dockerMan/templates-user/u1-print-bridge-slicer.xml \
+  https://raw.githubusercontent.com/ErRoR7/u1-print-bridge/main/unraid/u1-print-bridge-slicer.xml
 ```
 
 Then Docker → Add Container → pick `u1-print-bridge-api` and
