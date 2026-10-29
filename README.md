@@ -150,7 +150,7 @@ to Spoolman, so there's exactly one writer and the numbers can't drift.
 
 ## Attribution
 
-- Upstream OrcaSlicer (AGPL) v2.4.0 — downloaded at slicer image build time;
+- Upstream OrcaSlicer (AGPL) v2.4.2 — downloaded at slicer image build time;
   bundles the U1 machine/process/filament profiles used for slicing.
   (Switched from the Snapmaker fork 2026-10-10: the fork's CLI segfaults on
   3MF + --load-settings/--load-filaments.)

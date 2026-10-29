@@ -44,7 +44,7 @@ log = logging.getLogger("u1-bridge.app")
 
 STARTED_AT = datetime.now(timezone.utc).isoformat()
 
-# Slicer quality presets: key -> upstream OrcaSlicer v2.4.0 U1 process profile
+# Slicer quality presets: key -> upstream OrcaSlicer v2.4.2 U1 process profile
 # name. The slicer image flattens each of these at build time.
 QUALITIES = {
     "draft": "0.28 Extra Draft @Snapmaker U1 (0.4 nozzle)",

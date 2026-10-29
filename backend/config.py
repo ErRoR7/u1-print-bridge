@@ -34,7 +34,7 @@ class Config:
     # Public base URL of this bridge, used for ntfy deep links; omit when empty
     BRIDGE_URL: str = _env("BRIDGE_URL", "")
 
-    VERSION: str = "1.0.15"
+    VERSION: str = "1.0.16"
 
     @classmethod
     def refresh(cls) -> None:

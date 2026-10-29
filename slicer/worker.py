@@ -7,7 +7,7 @@ DATA_DIR volume. Every 3s it atomically claims one job in `slicing` status and:
 1. Builds 4 filament JSONs from the stock U1 filament profile template,
    overriding filament_colour from the job plan's spool colors (material
    matched to a stock template when one exists, else PLA).
-2. Runs the Snapmaker OrcaSlicer fork CLI headless under xvfb:
+2. Runs the upstream OrcaSlicer CLI headless under xvfb:
      xvfb-run -a /opt/orca/squashfs-root/AppRun --slice <plate+1>
        --load-settings "<machine>;<process>"
        --load-filaments "<f0>;<f1>;<f2>;<f3>"

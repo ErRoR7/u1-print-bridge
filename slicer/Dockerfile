@@ -10,13 +10,20 @@
 # Asset verification (2026-10-10, via GitHub API):
 #   repo: OrcaSlicer/OrcaSlicer, tag: v2.4.0
 #   asset: OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.0.AppImage
+# Bumped 2026-10-28 to v2.4.2 (maintenance: preset repair, {layer_z}
+# prime-tower fix, estimate fix; no CLI changes in release notes).
+# NOTE: the v2.4.2 asset name below follows the v2.4.0 pattern but was NOT
+# verified against the release assets (same trap as 2026-10-10). curl -fSL
+# fails the build loudly on a 404, so a wrong name surfaces at build time.
+# Also check the build log for "WARN: unresolved inherits" (2.4.2 runs
+# profile checks for every brand by default).
 #   binary: squashfs-root/bin/orca-slicer (NOT AppRun -- AppRun is the GUI!)
 #   profiles: squashfs-root/resources/profiles/Snapmaker/{machine,process,filament}/
 FROM python:3.12-slim
 
-ARG ORCA_VERSION=2.4.0
-ARG ORCA_TAG=v2.4.0
-ARG ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.0.AppImage
+ARG ORCA_VERSION=2.4.2
+ARG ORCA_TAG=v2.4.2
+ARG ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
