@@ -1,0 +1,71 @@
+# Publish the print-bridge images to GitHub Container Registry.
+#
+# Every push to main builds both images and pushes them to ghcr.io, tagged
+# `latest` plus the VERSION from backend/config.py. The Unraid templates in
+# unraid/ point at these images, so updating on Tower is a one-click pull
+# instead of a local rebuild. Packages must be PUBLIC for Unraid to pull
+# anonymously; check visibility after the first run (profile -> Packages).
+#
+# Image names are lowercase (GHCR requirement): the GitHub owner is ErRoR7,
+# the registry namespace is error7.
+
+name: Publish Docker images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-main
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read-version
+        run: |
+          VERSION="$(grep -oP 'VERSION: str = "\K[^"]+' backend/config.py)"
+          if [ -z "$VERSION" ]; then echo "VERSION not found in backend/config.py" >&2; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            context: .
+            dockerfile: Dockerfile.api
+          - image: slicer
+            context: slicer
+            dockerfile: slicer/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/error7/u1-print-bridge-${{ matrix.image }}:latest
+            ghcr.io/error7/u1-print-bridge-${{ matrix.image }}:${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=u1-print-bridge-${{ matrix.image }}
+          cache-to: type=gha,scope=u1-print-bridge-${{ matrix.image }},mode=max
