@@ -88,8 +88,9 @@ at those images, so updating is a one-click pull instead of a rebuild.
 **Install the templates** (one time):
 
 ```bash
-cp /mnt/user/appdata/u1-print-bridge/unraid/*.xml \
-  /boot/config/plugins/dockerMan/templates-user/
+cp /mnt/user/appdata/u1-print-bridge/unraid/u1-print-bridge-api.xml \
+   /mnt/user/appdata/u1-print-bridge/unraid/u1-print-bridge-slicer.xml \
+   /boot/config/plugins/dockerMan/templates-user/
 ```
 
 Then Docker → Add Container → pick `u1-print-bridge-api` and
