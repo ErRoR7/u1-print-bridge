@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>u1-print-bridge-api</Name>
+  <Repository>ghcr.io/error7/u1-print-bridge-api:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ErRoR7/u1-print-bridge</Support>
+  <Project>https://github.com/ErRoR7/u1-print-bridge</Project>
+  <Overview>One-click print bridge API for the Snapmaker U1: paste a model link or upload a 3MF, check the color to slot mapping, and start multi-color prints from your phone. Pair with the u1-print-bridge-slicer container sharing the same Data path.</Overview>
+  <Category>Other: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://github.com/ErRoR7/u1-print-bridge</TemplateURL>
+  <Icon></Icon>
+  <ExtraParams></ExtraParams>
+  <PostArgs></PostArgs>
+  <CPUset></CPUset>
+  <DateInstalled></DateInstalled>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+  <Requires></Requires>
+  <Config Name="Web UI Port" Target="8080" Default="8080" Mode="tcp" Description="Port for the print-bridge web UI and API." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/u1-print-bridge/data" Mode="rw" Description="Job database and slice artifacts. MUST be the same path in the api and slicer containers." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/u1-print-bridge/data</Config>
+  <Config Name="Printer URL" Target="PRINTER_URL" Default="http://192.168.68.242:7125" Mode="" Description="Moonraker on the Snapmaker U1." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.68.242:7125</Config>
+  <Config Name="Spoolman URL" Target="SPOOLMAN_URL" Default="http://192.168.68.84:7912" Mode="" Description="Spoolman filament inventory (read-only for the bridge)." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.68.84:7912</Config>
+  <Config Name="ntfy Topic" Target="NTFY_TOPIC" Default="u1-print-bridge" Mode="" Description="ntfy topic for pipeline alerts. Empty disables alerts." Type="Variable" Display="always" Required="false" Mask="false">u1-print-bridge</Config>
+  <Config Name="ntfy Server" Target="NTFY_SERVER" Default="https://ntfy.sh" Mode="" Description="ntfy server URL." Type="Variable" Display="advanced" Required="false" Mask="false">https://ntfy.sh</Config>
+  <Config Name="Bridge URL" Target="BRIDGE_URL" Default="" Mode="" Description="Public base URL of this bridge, used for ntfy deep links. Leave empty when not set." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="MakerWorld Session Cookie" Target="MAKERWORLD_SESSION_COOKIE" Default="" Mode="" Description="Optional logged-in MakerWorld session cookie for best-effort downloads. Leave empty for manual-upload fallback." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Data Dir" Target="DATA_DIR" Default="/data" Mode="" Description="Data directory inside the container. Keep /data." Type="Variable" Display="advanced" Required="true" Mask="false">/data</Config>
+</Container>

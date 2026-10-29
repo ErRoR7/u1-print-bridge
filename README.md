@@ -77,6 +77,51 @@ docker compose up -d --build
 
 Then open `http://<unraid-ip>:8080` on your phone (same Wi-Fi).
 
+## Unraid templates (one-click updates)
+
+Every push to `main` publishes fresh images to GitHub Container Registry
+via `.github/workflows/docker-publish.yml` — `ghcr.io/error7/u1-print-bridge-api`
+and `ghcr.io/error7/u1-print-bridge-slicer`, tagged `latest` plus the
+`VERSION` from `backend/config.py`. The Unraid templates in `unraid/` point
+at those images, so updating is a one-click pull instead of a rebuild.
+
+**Install the templates** (one time):
+
+```bash
+cp /mnt/user/appdata/u1-print-bridge/unraid/*.xml \
+  /boot/config/plugins/dockerMan/templates-user/
+```
+
+Then Docker → Add Container → pick `u1-print-bridge-api` and
+`u1-print-bridge-slicer` from the template dropdown. Fill in the values
+(defaults match this network); both containers MUST map the same Data path.
+Tick Autostart on both. The first time, also check the packages are public:
+GitHub → ErRoR7 → Packages → each `u1-print-bridge-*` package → Package
+settings → Change visibility → Public. Unraid pulls anonymously, so a
+private package fails with an unauthorized error.
+
+**Migrate from the compose stack** (keeps your job history):
+
+```bash
+cd /mnt/user/appdata/u1-print-bridge
+docker compose down
+mkdir -p /mnt/user/appdata/u1-print-bridge/data
+VOLUME=$(docker volume ls -q | grep -m1 printbridge)
+docker run --rm \
+  -v "$VOLUME:/from:ro" \
+  -v /mnt/user/appdata/u1-print-bridge/data:/to \
+  alpine sh -c "cp -a /from/. /to/"
+```
+
+Then create both containers from the templates, open the app, and check
+`/api/health` is green before removing the old named volume
+(`docker volume rm "$VOLUME"`) — only once the new containers have sliced
+a job successfully.
+
+**Updates:** Docker tab → Check for updates → Update. To roll back, edit the
+container, change `:latest` to a previous version tag (e.g. `:1.0.16`), and
+apply. The compose setup in this repo keeps working as a fallback.
+
 ## Self-test
 
 Open `http://<unraid-ip>:8080/api/health` in a browser (or tap the pill at the
