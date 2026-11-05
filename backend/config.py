@@ -29,6 +29,9 @@ class Config:
     # Optional logged-in MakerWorld session cookie for best-effort downloads.
     # Never used to bypass login walls; absent cookie => manual-upload fallback.
     MAKERWORLD_SESSION_COOKIE: str = _env("MAKERWORLD_SESSION_COOKIE", "")
+    # Bambu -> U1 3MF converter sidecar (thadius83/bambu-to-snapmaker-u1).
+    # Empty disables conversion; the original file is used unchanged then.
+    CONVERTER_URL: str = _env("CONVERTER_URL", "")
     # Job storage root (jobs.db + per-job dirs live here)
     DATA_DIR: str = _env("DATA_DIR", "/data")
     # Public base URL of this bridge, used for ntfy deep links; omit when empty
@@ -44,6 +47,7 @@ class Config:
         cls.NTFY_TOPIC = _env("NTFY_TOPIC", "u1-print-bridge")
         cls.NTFY_SERVER = _env("NTFY_SERVER", "https://ntfy.sh")
         cls.MAKERWORLD_SESSION_COOKIE = _env("MAKERWORLD_SESSION_COOKIE", "")
+        cls.CONVERTER_URL = _env("CONVERTER_URL", "")
         cls.DATA_DIR = _env("DATA_DIR", "/data")
         cls.BRIDGE_URL = _env("BRIDGE_URL", "")
 

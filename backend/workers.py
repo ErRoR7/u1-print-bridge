@@ -4,6 +4,10 @@ Pipeline thread:   created -> fetching -> inspecting -> awaiting_confirm
 Upload+monitor:    uploading -> printing -> done/failed (claimed via claimed_by)
 Slicer:            separate container/service (slicer/worker.py) owns `slicing`.
 
+Conversion (Bambu -> U1) runs at the start of inspecting when the converter
+sidecar is configured; a failed or missing sidecar never fails the job --
+the original file is used unchanged.
+
 SPOOLMAN IS READ-ONLY HERE. The bridge reads spool color/material/remaining
 grams to build the color plan and to sanity-check filament sufficiency, but it
 never writes: the printer itself deducts filament usage from Spoolman via its
@@ -22,7 +26,7 @@ from pathlib import Path
 
 import httpx
 
-from . import colors, db, fetchers, moonraker, ntfy, spoolman, threedmf
+from . import colors, converter, db, fetchers, moonraker, ntfy, spoolman, threedmf
 from .config import config
 
 log = logging.getLogger("u1-bridge.workers")
@@ -169,13 +173,42 @@ def _build_plan(conn, job_id: str, inspection: threedmf.Inspection) -> tuple[lis
     return plan, proposed
 
 
+def _maybe_convert(conn, job_id, row, jdir) -> str:
+    """Convert a Bambu project to U1 via the sidecar, when configured.
+
+    Returns the (possibly new) input path. Never raises: any converter
+    failure logs a warning and the original file is used unchanged.
+    """
+    src = Path(row["input_path"])
+    if not config.CONVERTER_URL:
+        return str(src)
+    ok, reason = converter.should_convert(src)
+    if not ok:
+        return str(src)
+    dest = jdir / "model_converted.3mf"
+    try:
+        counts = converter.convert_file(config.CONVERTER_URL, src, dest)
+    except converter.ConverterError as exc:
+        db.append_log(conn, job_id, "warning",
+                      f"Bambu->U1 converter unavailable ({exc}); "
+                      "slicing the original file.")
+        return str(src)
+    summary = (", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+               if counts else "no changes reported")
+    db.append_log(conn, job_id, "info",
+                  f"Converted {reason} to a U1 project ({summary}).")
+    db.update_job(conn, job_id, input_path=str(dest))
+    return str(dest)
+
+
 def _inspect_and_plan(db_path: str, job_id: str, conn) -> None:
     row = db.get_job(conn, job_id)
     jdir = job_dir(db_path, job_id)
     db.set_status(conn, job_id, "inspecting")
     db.append_log(conn, job_id, "info", f"Inspecting {Path(row['input_path']).name} ...")
+    input_path = _maybe_convert(conn, job_id, row, jdir)
     try:
-        inspection = threedmf.inspect(row["input_path"])
+        inspection = threedmf.inspect(input_path)
     except threedmf.InspectorError as exc:
         fail_job(conn, job_id, str(exc), exc.code, stage="inspecting")
         return

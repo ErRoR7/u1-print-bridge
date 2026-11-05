@@ -29,5 +29,6 @@
   <Config Name="ntfy Server" Target="NTFY_SERVER" Default="https://ntfy.sh" Mode="" Description="ntfy server URL." Type="Variable" Display="advanced" Required="false" Mask="false">https://ntfy.sh</Config>
   <Config Name="Bridge URL" Target="BRIDGE_URL" Default="" Mode="" Description="Public base URL of this bridge, used for ntfy deep links. Leave empty when not set." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="MakerWorld Session Cookie" Target="MAKERWORLD_SESSION_COOKIE" Default="" Mode="" Description="Optional logged-in MakerWorld session cookie for best-effort downloads. Leave empty for manual-upload fallback." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Converter URL" Target="CONVERTER_URL" Default="http://192.168.68.84:8084" Mode="" Description="Bambu-&gt;U1 converter sidecar (u1-print-bridge-converter container). Empty disables conversion; the bridge then uses the original file unchanged." Type="Variable" Display="advanced" Required="false" Mask="false">http://192.168.68.84:8084</Config>
   <Config Name="Data Dir" Target="DATA_DIR" Default="/data" Mode="" Description="Data directory inside the container. Keep /data." Type="Variable" Display="advanced" Required="true" Mask="false">/data</Config>
 </Container>

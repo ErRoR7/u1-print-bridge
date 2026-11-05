@@ -37,7 +37,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import colors, db, fetchers, moonraker, ntfy, preview, spoolman, workers
+from . import colors, converter, db, fetchers, moonraker, ntfy, preview, spoolman, workers
 from .config import config
 
 log = logging.getLogger("u1-bridge.app")
@@ -173,6 +173,7 @@ def _probe_all() -> dict:
         "moonraker": moonraker.health(config.PRINTER_URL),
         "spoolman": spoolman.health(config.SPOOLMAN_URL),
         "ntfy": ntfy.health(config.NTFY_SERVER, config.NTFY_TOPIC),
+        "converter": converter.health(config.CONVERTER_URL),
     }
 
 

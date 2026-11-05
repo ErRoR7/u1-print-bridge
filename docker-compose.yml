@@ -12,6 +12,9 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      # Compose DNS resolves the converter service by name.
+      - CONVERTER_URL=http://converter:8080
     volumes:
       - printbridge-data:/data
       # The API serves the static frontend from /app/frontend (FRONTEND_DIR).
@@ -31,6 +34,15 @@ services:
       - .env
     volumes:
       - printbridge-data:/data
+    restart: unless-stopped
+
+  # Bambu/MakerWorld 3MF -> U1 converter (optional). The api calls it over
+  # HTTP when CONVERTER_URL is set; with no converter the bridge just uses
+  # the original file. Prebuilt upstream image, no build step.
+  converter:
+    image: ghcr.io/thadius83/bambu-to-snapmaker-u1:latest
+    ports:
+      - "8084:8080"
     restart: unless-stopped
 
 volumes:

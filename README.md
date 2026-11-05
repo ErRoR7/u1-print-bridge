@@ -17,7 +17,9 @@ alongside — this compose file expects both directories to exist.
 2. **The bridge fetches and inspects it.** It downloads the model, reads the
    color plan from the 3MF, and checks what's loaded in the printer slots.
    (Time and filament estimates are calculated during slicing, after you
-   confirm.)
+   confirm.) Bambu/MakerWorld project files are converted to U1 project
+   files first when the converter sidecar is configured (see below); without
+   it the original file is used as-is.
 3. **You check the colors.** The app shows each color the model needs next to
    the spool that's actually sitting in that printer slot (read live from
    Spoolman): "Slot 1 needs red PLA → printer slot 1 (T0) has red PLA, 245 g
@@ -93,10 +95,13 @@ curl -fL -o /boot/config/plugins/dockerMan/templates-user/u1-print-bridge-api.xm
   https://raw.githubusercontent.com/ErRoR7/u1-print-bridge/main/unraid/u1-print-bridge-api.xml
 curl -fL -o /boot/config/plugins/dockerMan/templates-user/u1-print-bridge-slicer.xml \
   https://raw.githubusercontent.com/ErRoR7/u1-print-bridge/main/unraid/u1-print-bridge-slicer.xml
+curl -fL -o /boot/config/plugins/dockerMan/templates-user/u1-print-bridge-converter.xml \
+  https://raw.githubusercontent.com/ErRoR7/u1-print-bridge/main/unraid/u1-print-bridge-converter.xml
 ```
 
-Then Docker → Add Container → pick `u1-print-bridge-api` and
-`u1-print-bridge-slicer` from the template dropdown. Fill in the values
+Then Docker → Add Container → pick `u1-print-bridge-api`,
+`u1-print-bridge-slicer`, and (optional, for Bambu conversion)
+`u1-print-bridge-converter` from the template dropdown. Fill in the values
 (defaults match this network); both containers MUST map the same Data path.
 Tick Autostart on both. The first time, also check the packages are public:
 GitHub → ErRoR7 → Packages → each `u1-print-bridge-*` package → Package
@@ -125,6 +130,37 @@ a job successfully.
 container, change `:latest` to a previous version tag (e.g. `:1.0.16`), and
 apply. The compose setup in this repo keeps working as a fallback.
 
+## Bambu / MakerWorld conversion (optional)
+
+MakerWorld and Bambu Studio project files carry Bambu printer identity,
+G-code blocks, and filament slots the U1 slicer can't use directly. When the
+converter sidecar is running, the bridge rewrites those files into U1 project
+files (geometry, paint, and extruder mapping preserved) between download and
+inspect, so a MakerWorld link just works. The bridge still slices with its
+own U1 profiles — the converter's embedded tuning settings are discarded at
+slice time, so what you get is the model correctly mapped to the U1's 4
+toolheads, not Bambu-tuned print settings.
+
+**Setup:** create the `u1-print-bridge-converter` container from the template
+above (or the `converter` service in `docker-compose.yml`). The API template
+defaults `CONVERTER_URL` to `http://192.168.68.84:8084` — the converter's
+published port on the Unraid host. Its API has no auth, so keep it LAN-only.
+
+**Behavior:**
+- Only Bambu project files with **4 or fewer filament colours** are converted.
+  Painted models with more than 4 colours have no automatic answer and keep
+  the bridge's existing behavior (the inspector rejects extruder indices
+  above 4 with a clear message).
+- Already-U1 files, bare 3MFs, STLs, and non-Bambu projects skip conversion.
+- If the converter is down or errors, the job logs a warning and slices the
+  original file — conversion never fails a job.
+- `/api/health` shows the converter as `converter`: green when reachable,
+  "not configured" when `CONVERTER_URL` is empty.
+
+The converter is upstream `thadius83/bambu-to-snapmaker-u1`
+([u1convert.com](https://u1convert.com/)), PolyForm Noncommercial licensed —
+personal use only, run as a sidecar, not vendored into this repo.
+
 ## Self-test
 
 Open `http://<unraid-ip>:8080/api/health` in a browser (or tap the pill at the
@@ -140,6 +176,9 @@ top of the app). You get one entry per service:
   ntfy server is reachable. If `NTFY_TOPIC` is empty this shows as disabled
   (bridge alerts off — the app itself still works fine). It defaults to
   `u1-print-bridge`.
+- **converter (Bambu→U1)** — green means the converter sidecar is reachable.
+  "not configured" means `CONVERTER_URL` is empty and Bambu conversion is
+  off; Bambu files are then used as-is.
 
 ## Phone setup
 
@@ -203,6 +242,9 @@ to Spoolman, so there's exactly one writer and the numbers can't drift.
   (Switched from the Snapmaker fork 2026-10-10: the fork's CLI segfaults on
   3MF + --load-settings/--load-filaments.)
 - `3mf-to-glb` (MIT) — used for format knowledge in thumbnail/3MF handling.
+- Bambu→U1 converter — `thadius83/bambu-to-snapmaker-u1` (PolyForm
+  Noncommercial 1.0.0), run as an optional sidecar; see "Bambu / MakerWorld
+  conversion" above.
 - Spoolman — filament inventory, the source of truth for loaded spools.
 - OctoEverywhere — printer notifications and AI failure detection.
 

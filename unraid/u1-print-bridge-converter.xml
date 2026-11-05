@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>u1-print-bridge-converter</Name>
+  <Repository>ghcr.io/thadius83/bambu-to-snapmaker-u1:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/thadius83/bambu-to-snapmaker-u1</Support>
+  <Project>https://github.com/thadius83/bambu-to-snapmaker-u1</Project>
+  <Overview>Bambu/MakerWorld 3MF to Snapmaker U1 converter for the u1-print-bridge. The bridge API calls this sidecar over HTTP to rewrite Bambu project files (printer identity, G-code blocks, filament slots) into U1 project files before slicing. Optional: without it the bridge just uses the original file. Its API has no auth, so keep it LAN-only. Upstream project is PolyForm Noncommercial licensed (personal use).</Overview>
+  <Category>Other: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8084]/</WebUI>
+  <TemplateURL>https://github.com/ErRoR7/u1-print-bridge</TemplateURL>
+  <Icon></Icon>
+  <ExtraParams></ExtraParams>
+  <PostArgs></PostArgs>
+  <CPUset></CPUset>
+  <DateInstalled></DateInstalled>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+  <Requires></Requires>
+  <Config Name="Web UI Port" Target="8080" Default="8084" Mode="tcp" Description="Port for the converter web UI and API. The bridge API reaches it at http://&lt;unraid-ip&gt;:8084." Type="Port" Display="always" Required="true" Mask="false">8084</Config>
+</Container>
