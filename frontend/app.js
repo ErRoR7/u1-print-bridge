@@ -759,14 +759,21 @@
     var plan = Array.isArray(job.plan) ? job.plan.slice() : [];
     plan.sort(function (a, b) { return (a.slot || 0) - (b.slot || 0); });
 
-    // Initial toolhead per row: the Spoolman-location toolhead of the proposed
-    // spool (== the slot's positional toolhead), else the positional default.
-    // Deliberately NOT derived from printer-reported colors: those can be
-    // stale/misordered and used to bias every row toward T0.
+    // Initial toolhead per row: the bridge's auto-mapping (closest loaded
+    // color on the printer, one toolhead per slot, good matches only), else
+    // the Spoolman-location toolhead of the proposed spool, else the
+    // positional default. Auto-mapping guards against the old failure modes:
+    // it is one-to-one (no two rows pile onto one toolhead) and only fires
+    // for close matches (dE < 35, same material preferred), so a stale or
+    // misordered printer color falls back to positional instead of biasing
+    // every row.
     var toolSel = {};
     plan.forEach(function (p, i) {
       var key = String(i);
-      var th = (typeof p.spool_toolhead === "number") ? p.spool_toolhead : null;
+      var th = (typeof p.auto_toolhead === "number") ? p.auto_toolhead : null;
+      if (th === null) {
+        th = (typeof p.spool_toolhead === "number") ? p.spool_toolhead : null;
+      }
       if (th === null) {
         var tm = /^T([0-3])$/.exec(p.toolhead || "");
         th = tm ? parseInt(tm[1], 10) : Math.min(i, 3);
@@ -875,6 +882,9 @@
         var d = colorDistance(p.required_hex, entry.color_hex || entry.spool.color_hex);
         if (d < 3000) { badgeText = "✓ looks good"; badgeCls = "badge ok"; }
         else { badgeText = "⚠ different color — check it"; badgeCls = "badge warn"; }
+      }
+      if (typeof p.auto_toolhead === "number" && p.auto_toolhead === thIdx && haveColor) {
+        badgeText += " · auto-matched";
       }
       row.appendChild(el("p", badgeCls, badgeText));
 

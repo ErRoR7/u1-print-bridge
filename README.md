@@ -14,22 +14,27 @@ alongside — this compose file expects both directories to exist.
 1. **Find a model.** Paste a Printables or MakerWorld link,
    or upload a 3MF file you saved yourself. (The old in-app Printables
    search was removed — paste the link from your browser instead.)
-2. **The bridge fetches and inspects it.** It downloads the model, reads the
-   color plan from the 3MF, and checks what's loaded in the printer slots.
-   (Time and filament estimates are calculated during slicing, after you
-   confirm.) Bambu/MakerWorld project files are converted to U1 project
-   files first when the converter sidecar is configured (see below); without
-   it the original file is used as-is.
+2. **The bridge fetches and inspects it.** It downloads the model (MakerWorld
+   downloads go through MakerWorld's download API with your session cookie —
+   see `.env.example`), reads the color plan from the 3MF, and checks what's
+   loaded in the printer slots. (Time and filament estimates are calculated
+   during slicing, after you confirm.) Bambu/MakerWorld project files are
+   converted to U1 project files first when the converter sidecar is
+   configured (see below); without it the original file is used as-is.
 3. **You check the colors.** The app shows each color the model needs next to
    the spool that's actually sitting in that printer slot (read live from
    Spoolman): "Slot 1 needs red PLA → printer slot 1 (T0) has red PLA, 245 g
-   left ✓". If a slot doesn't match, you can pick a different spool from a
-   list — or physically load the right spool and update Spoolman. You can also
-   set quality, scale/copies, and force supports on or off here. A preview
-   panel at the bottom renders an isometric preview of the actual sliced
-   toolpath in the colors you mapped, so you can see exactly how the print
-   will look before starting. Each model color is also listed next to the
-   toolhead you picked, so you can double-check the mapping.
+   left ✓". The bridge also auto-maps each color to the closest filament
+   actually loaded on the printer (one toolhead per color, good matches only,
+   same material preferred) and pre-selects those toolheads for you — just
+   review the picks and change any before starting. If a slot doesn't match,
+   you can pick a different spool from a list — or physically load the right
+   spool and update Spoolman. You can also set quality, scale/copies, and
+   force supports on or off here. A preview panel at the bottom renders an
+   isometric preview of the actual sliced toolpath in the colors you mapped,
+   so you can see exactly how the print will look before starting. Each model
+   color is also listed next to the toolhead you picked, so you can
+   double-check the mapping.
 4. **Tap Start print.** The bridge slices the model with the Snapmaker U1
    profiles, then verifies each toolhead has *enough* filament *of the right
    material* before anything goes to the printer.
@@ -223,11 +228,12 @@ to Spoolman, so there's exactly one writer and the numbers can't drift.
   and credentials will need to be configured (see `backend/README.md`).
 - **OrcaSlicer crash during slicing.** The backend retries automatically with
   a minimal-3MF fallback; check the job's "Details" log for what happened.
-- **MakerWorld download fails.** MakerWorld is behind Cloudflare and may block
-  server-side downloads. The job will ask you to download the 3MF in your own
-  browser and use "Attach the 3MF file" (or the upload option) — still one
-  button after that. Pasting a session cookie into `MAKERWORLD_SESSION_COOKIE`
-  sometimes helps; see `.env.example`.
+- **MakerWorld download fails.** MakerWorld only lets logged-in users
+  download models. The bridge calls MakerWorld's download API with your
+  session cookie (`MAKERWORLD_SESSION_COOKIE` in `.env` — see
+  `.env.example` for how to copy it); without one, or with an expired one,
+  the job will ask you to download the 3MF in your own browser and use
+  "Attach the 3MF file" (or the upload option) — still one button after that.
 - **Spoolman locations (optional).** The color-check screen reads loaded
   filaments from the printer itself, so location naming isn't required.
   Naming spool locations `T0`–`T3` is only a fallback for firmware that
@@ -254,5 +260,6 @@ to Spoolman, so there's exactly one writer and the numbers can't drift.
   later — it never interrupts a running print).
 - Starting prints from outside the LAN (no remote start without VPN/Tailscale;
   remote *monitoring* is already covered by OctoEverywhere).
-- Software re-mapping of brush-painted colors — v1 uses positional mapping
-  (slot N → toolhead T(N−1)) and the confirm screen instead.
+- Software re-mapping of brush-painted colors on models with more than 4
+  colors — auto-mapping covers up to 4 colors by closest loaded filament;
+  painted models over 4 colors still need manual handling.

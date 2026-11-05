@@ -3,11 +3,15 @@
 Sources:
 - Printables: public GraphQL API (api.printables.com/graphql) -- verified
   working end-to-end from a cloud VM, no auth. 2s delay between calls.
-- MakerWorld: BEST EFFORT ONLY. Pages/API sit behind Cloudflare; we fetch the
-  model page HTML (with MAKERWORLD_SESSION_COOKIE when provided) and regex for
-  download links. Any failure -- challenge page, login wall, no link found --
-  raises NeedsManualUpload so the UI can ask for a manual 3MF upload.
-  We NEVER attempt to bypass login walls or CAPTCHAs.
+- MakerWorld: design-service f3mf API (makerworld.com/api/v1/design-service/
+  instance/{instanceId}/f3mf?type=download). The model page itself is a
+  Next.js shell with no download links in its HTML, so page scraping cannot
+  work; the API returns either a presigned S3 URL ({name, url}) or the 3MF
+  binary directly. Downloading requires a logged-in MakerWorld session: pass
+  MAKERWORLD_SESSION_COOKIE (the browser's Cookie header value for
+  makerworld.com, see .env.example). Without it the API answers "Please log
+  in" and we ask for a manual upload. We NEVER attempt to bypass login walls
+  or CAPTCHAs. The legacy page scrape is kept as a last-resort fallback.
 - Other URLs: direct download with content-type/length sanity + extension or
   magic-byte checks.
 
@@ -29,6 +33,21 @@ log = logging.getLogger("u1-bridge.fetchers")
 PRINTABLES_GQL = "https://api.printables.com/graphql/"
 PRINTABLES_MODEL_RE = re.compile(r"printables\.com/model/(\d+)", re.I)
 MAKERWORLD_RE = re.compile(r"makerworld\.com", re.I)
+# /models/{designId}-{slug} with an optional #profileId-{instanceId} fragment
+# (or ?profileId= query). The fragment id is the *instance* id, which is what
+# the f3mf download endpoint expects -- not the numeric profileId inside the
+# design data.
+MAKERWORLD_MODEL_RE = re.compile(r"makerworld\.com/(?:[a-z]{2}/)?models/(\d+)", re.I)
+MAKERWORLD_INSTANCE_RE = re.compile(r"profileId[-=](\d+)", re.I)
+# Anonymous design metadata (title + default instance). Download itself needs
+# a logged-in session (see download_makerworld).
+BAMBULAB_DESIGN_API = "https://api.bambulab.com/v1/design-service/design/{design_id}"
+MAKERWORLD_F3MF_API = "https://makerworld.com/api/v1/design-service/instance/{instance_id}/f3mf"
+
+_MAKERWORLD_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 
 _GQL_HEADERS = {
     "Content-Type": "application/json",
@@ -65,10 +84,18 @@ class FetchError(Exception):
 class NeedsManualUpload(FetchError):
     """MakerWorld (or another gated source) needs a manual 3MF upload."""
 
-    def __init__(self):
+    def __init__(self, message: str | None = None):
         super().__init__(
-            "MakerWorld needs a manual upload \u2014 download the 3MF in your browser and attach it here."
+            message
+            or "MakerWorld needs a manual upload \u2014 download the 3MF in your browser and attach it here."
         )
+
+
+MAKERWORLD_LOGIN_HINT = (
+    "MakerWorld needs a login to download this model \u2014 paste your MakerWorld "
+    "session cookie into MAKERWORLD_SESSION_COOKIE (see .env.example) or "
+    "download the 3MF in your browser and attach it here."
+)
 
 
 def canonical_printables_url(print_id: str, name: str) -> str:
@@ -172,14 +199,120 @@ def download_printables(url: str, job_dir: Path, file_id: str | None = None,
     return dest, title
 
 
-def download_makerworld(url: str, job_dir: Path, session_cookie: str = "", delay: float = 3.0) -> tuple[Path, str]:
-    """Best-effort MakerWorld download. Raises NeedsManualUpload on ANY failure.
+def _makerworld_ids(url: str) -> tuple[str | None, str | None]:
+    """(design_id, instance_id) parsed from a MakerWorld model URL.
 
-    Fetches the model page HTML (with the optional session cookie) and looks
-    for download href/src links. Never bypasses login walls: if the page shows
-    a login gate and no usable link, we give up and ask for a manual upload.
+    The instance id comes from the #profileId-{id} fragment (or a profileId
+    query param); it is the *instance* id, which is what the f3mf download
+    endpoint expects.
+    """
+    m = MAKERWORLD_MODEL_RE.search(url)
+    design_id = m.group(1) if m else None
+    parsed = urlparse(url)
+    pm = MAKERWORLD_INSTANCE_RE.search(parsed.fragment + "&" + parsed.query)
+    instance_id = pm.group(1) if pm else None
+    return design_id, instance_id
+
+
+def _makerworld_design_meta(design_id: str, timeout: float = 20.0) -> dict | None:
+    """Anonymous design metadata (title + default instance id).
+
+    Uses the Bambu Cloud design-service endpoint, which answers without auth
+    for public designs. Returns None on any failure.
+    """
+    try:
+        resp = httpx.get(
+            BAMBULAB_DESIGN_API.format(design_id=design_id),
+            headers={"User-Agent": _MAKERWORLD_UA},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        log.info("MakerWorld design metadata lookup failed: %s", exc)
+        return None
+
+
+def _makerworld_f3mf_download(instance_id: str, job_dir: Path,
+                              session_cookie: str = "") -> Path:
+    """Download a profile 3MF via the design-service f3mf endpoint.
+
+    Returns the saved model.3mf path. Raises NeedsManualUpload when MakerWorld
+    demands a login (no/expired session cookie) or returns no usable file,
+    and lets other exceptions propagate so the caller can fall back to the
+    legacy page scrape.
+    """
+    headers = {"User-Agent": _MAKERWORLD_UA}
+    if session_cookie:
+        headers["Cookie"] = session_cookie
+    resp = httpx.get(
+        MAKERWORLD_F3MF_API.format(instance_id=instance_id),
+        params={"type": "download"},
+        headers=headers,
+        timeout=30.0,
+        follow_redirects=True,
+    )
+    if resp.status_code in (401, 403):
+        raise NeedsManualUpload(MAKERWORLD_LOGIN_HINT)
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
+    body = resp.content
+    if "application/json" in content_type or body[:1] == b"{":
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise NeedsManualUpload()
+        if data.get("url"):
+            dest = job_dir / "model.3mf"
+            _download_stream(str(data["url"]), dest)
+            return dest
+        err = str(data.get("error") or data.get("error_msg") or "")
+        if "log in" in err.lower() or "login" in err.lower():
+            raise NeedsManualUpload(MAKERWORLD_LOGIN_HINT)
+        raise NeedsManualUpload()
+    if body[:2] == b"PK":
+        dest = job_dir / "model.3mf"
+        dest.write_bytes(body)
+        return dest
+    raise NeedsManualUpload()
+
+
+def download_makerworld(url: str, job_dir: Path, session_cookie: str = "", delay: float = 3.0) -> tuple[Path, str]:
+    """Best-effort MakerWorld download. Raises NeedsManualUpload on failure.
+
+    Primary path is the design-service f3mf API (needs a logged-in session
+    cookie for the actual download; the design metadata lookup is anonymous).
+    Falls back to the legacy model-page scrape, then gives up and asks for a
+    manual upload. Never bypasses login walls: a login-required response is
+    reported as such instead of retried.
     """
     time.sleep(delay)
+    design_id, instance_id = _makerworld_ids(url)
+    title = "MakerWorld model"
+    if design_id:
+        meta = _makerworld_design_meta(design_id)
+        if meta:
+            title = str(meta.get("title") or title)[:120]
+            if not instance_id and meta.get("defaultInstanceId"):
+                instance_id = str(meta["defaultInstanceId"])
+    if instance_id:
+        try:
+            dest = _makerworld_f3mf_download(instance_id, job_dir, session_cookie)
+            return dest, title
+        except NeedsManualUpload:
+            raise
+        except Exception as exc:
+            log.info("MakerWorld f3mf download failed (%s); trying page scrape", exc)
+    return _download_makerworld_legacy(url, job_dir, session_cookie, title)
+
+
+def _download_makerworld_legacy(url: str, job_dir: Path, session_cookie: str = "",
+                                title: str = "MakerWorld model") -> tuple[Path, str]:
+    """Legacy fallback: regex the model page HTML for download links.
+
+    Modern MakerWorld pages are a Next.js shell with no download hrefs, so
+    this rarely succeeds; it is kept for older/simple pages.
+    """
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
     if session_cookie:
         headers["Cookie"] = session_cookie
@@ -192,7 +325,7 @@ def download_makerworld(url: str, job_dir: Path, session_cookie: str = "", delay
             # Cloudflare challenge page -- not something we may bypass.
             raise NeedsManualUpload()
         title_m = re.search(r"<title>(.*?)</title>", html, re.S | re.I)
-        title = (title_m.group(1).strip()[:120] if title_m else "MakerWorld model")
+        title = (title_m.group(1).strip()[:120] if title_m else title)
         links = re.findall(r'''(?:href|src)="([^"]*download[^"]*)"''', html, re.I)
         # Prefer direct 3MF links; drop API-ish login-gated endpoints we can't use.
         links = [l for l in links if not re.search(r"login|signin|captcha", l, re.I)]

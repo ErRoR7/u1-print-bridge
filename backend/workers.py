@@ -90,6 +90,66 @@ def _density_for(material: str | None) -> float:
     return _DEFAULT_DENSITY
 
 
+def auto_map_toolheads(slots: list[dict], printer_heads: list[dict] | None,
+                        spool_by_toolhead: dict | None = None) -> dict:
+    """Greedy one-to-one mapping of palette slots to printer toolheads.
+
+    slots: plan entries with required_hex / required_material / grams.
+    printer_heads: moonraker.toolhead_filaments() output
+    ([{toolhead: 'T0', color_hex, material}, ...]) -- the colors actually
+    loaded on the printer, per PAXX print_task_config.
+    spool_by_toolhead: {toolhead_index: spool dict} for remaining-grams checks.
+
+    Returns {slot: {"toolhead", "de", "match"}} for slots with a good match
+    (delta-E < 35). Ranking per slot: filament-sufficient first, then
+    same-material, then closest color. Each toolhead is used at most once, so
+    two slots never auto-map to the same spool. Slots without a good match
+    are absent -- the caller keeps the positional default for those.
+    """
+    heads = []
+    for i, h in enumerate(printer_heads or []):
+        hex6 = colors.normalize_hex((h or {}).get("color_hex"))
+        if hex6 is None:
+            continue
+        heads.append((i, hex6, (h or {}).get("material")))
+    if not heads:
+        return {}
+    spool_by_toolhead = spool_by_toolhead or {}
+
+    cands = []
+    for entry in slots:
+        req = entry.get("required_hex")
+        if not req:
+            continue
+        try:
+            colors.hex_to_lab(req)
+        except ValueError:
+            continue
+        grams = entry.get("grams") or 0
+        for th, hex6, mat in heads:
+            de = colors.delta_e(req, hex6)
+            if de >= 35:
+                continue
+            mismatch = 0 if _materials_compatible(entry.get("required_material"), mat) else 1
+            spool = spool_by_toolhead.get(th)
+            remaining = (spool or {}).get("remaining_g")
+            enough = not (isinstance(remaining, (int, float)) and grams and remaining < grams)
+            cands.append((0 if enough else 1, mismatch, de, entry["slot"], th))
+    # Best first: sufficient filament, same material, closest color.
+    cands.sort(key=lambda c: (c[0], c[1], c[2]))
+    used_slots: set[int] = set()
+    used_ths: set[int] = set()
+    out: dict[int, dict] = {}
+    for _, _, de, slot, th in cands:
+        if slot in used_slots or th in used_ths:
+            continue
+        used_slots.add(slot)
+        used_ths.add(th)
+        out[slot] = {"toolhead": th, "de": round(de, 1),
+                     "match": "ok" if de < 12 else "close"}
+    return out
+
+
 def _build_plan(conn, job_id: str, inspection: threedmf.Inspection) -> tuple[list[dict], dict]:
     """Build the color plan against live Spoolman data (read-only).
 
@@ -170,6 +230,39 @@ def _build_plan(conn, job_id: str, inspection: threedmf.Inspection) -> tuple[lis
             "grams": grams,
             "match": match,
         })
+
+    # Auto-map slots to the closest filaments actually loaded on the printer
+    # (PAXX print_task_config colors). One toolhead per slot, good matches
+    # only; anything unmapped keeps the positional default. The printer call
+    # never raises (returns None when unavailable) and never fails the plan.
+    auto: dict[int, dict] = {}
+    try:
+        printer_heads = moonraker.toolhead_filaments(config.PRINTER_URL)
+    except Exception:
+        printer_heads = None
+    if printer_heads:
+        spool_by_th: dict[int, dict | None] = {}
+        for th in range(4):
+            cands = spoolman.spools_at_toolhead(spools, th) if spoolman_ok else []
+            spool_by_th[th] = next(
+                (s for s in cands if isinstance(s.get("remaining_g"), (int, float))), None)
+        auto = auto_map_toolheads(plan, printer_heads, spool_by_th)
+    mapped: list[str] = []
+    for entry in plan:
+        m = auto.get(entry["slot"])
+        if m:
+            entry["auto_toolhead"] = m["toolhead"]
+            entry["auto_de"] = m["de"]
+            entry["auto_match"] = m["match"]
+            mapped.append(f"slot {entry['slot']} \u2192 T{m['toolhead']} (dE {m['de']})")
+        else:
+            entry["auto_toolhead"] = None
+    if mapped:
+        db.append_log(
+            conn, job_id, "info",
+            "Auto-mapped colors to the closest loaded filaments: "
+            + "; ".join(mapped) + ". Review the picks before starting.",
+        )
     return plan, proposed
 
 
