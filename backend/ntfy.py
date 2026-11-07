@@ -71,6 +71,14 @@ _TEMPLATES = {
         ["white_check_mark", "tada"],
         3,
     ),
+    "first_layer_check": (
+        "U1 bridge: first layer done — check it",
+        "'{title}' finished layer 1 and is paused. Look at the photo: if the "
+        "first layer stuck to the bed, resume from the bridge; if it didn't, "
+        "cancel and fix the bed.",
+        ["camera", "pause"],
+        4,
+    ),
 }
 
 

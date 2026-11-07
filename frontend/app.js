@@ -367,8 +367,9 @@
     if (s === "printing") {
       var pct = (job.progress === null || job.progress === undefined) ? null : Math.round(job.progress);
       var label = pct === null ? "Printing" : "Printing — " + pct + "%";
-      if (job.printer_state && /paused/i.test(job.printer_state)) label = "Paused";
-      else {
+      if (job.printer_state && /paused/i.test(job.printer_state)) {
+        label = job.first_layer_pending ? "Paused — first layer check" : "Paused";
+      } else {
         var eta = etaText(job);
         if (eta) label += " · " + eta;
       }
@@ -408,6 +409,8 @@
     if (job.copies && job.copies > 1) opts.push(job.copies + " copies");
     if (job.quality && job.quality !== "standard") opts.push(job.quality);
     if (job.timelapse) opts.push("timelapse on");
+    if (job.overrides && Object.keys(job.overrides).length) opts.push("custom settings");
+    if (job.first_layer_check) opts.push("1st-layer check");
     if (opts.length) meta.appendChild(el("p", "job-estimate", opts.join(" · ")));
     if (job.status === "done") {
       if (job.final_snapshot) {
@@ -443,6 +446,20 @@
       fill.style.width = Math.max(0, Math.min(100, job.progress)) + "%";
       bar.appendChild(fill);
       card.appendChild(bar);
+    }
+
+    if (job.first_layer_pending) {
+      var fl = el("div", "first-layer-banner");
+      fl.appendChild(el("p", "first-layer-title", "⏸ First layer done — check it before the print continues"));
+      if (job.first_layer_snapshot) {
+        var fs = el("img", "job-snapshot");
+        fs.src = job.first_layer_snapshot;
+        fs.alt = "First layer";
+        fs.loading = "lazy";
+        fl.appendChild(fs);
+      }
+      fl.appendChild(el("p", "hint", "If the first layer stuck to the bed, tap Resume below. If not, tap Cancel."));
+      card.appendChild(fl);
     }
 
     if (job.error) {
@@ -1115,6 +1132,20 @@
     if (tl) tl.checked = false;
     var ss = $("#supports-select");
     if (ss) ss.value = "model";
+    // advanced print settings (v1.0.18): everything back to "as sliced"
+    ["#brim-select", "#top-pattern-select", "#infill-pattern-select", "#seam-select"].forEach(function (id) {
+      var s = $(id);
+      if (s) s.value = "";
+    });
+    ["#brim-width-input", "#flh-input", "#fls-input", "#flt-input",
+     "#top-shells-input", "#infill-density-input", "#wall-loops-input"].forEach(function (id) {
+      var n = $(id);
+      if (n) n.value = "";
+    });
+    var ir = $("#ironing-check");
+    if (ir) ir.checked = false;
+    var flc = $("#first-layer-check");
+    if (flc) flc.checked = false;
     document.querySelectorAll("#scale-mode-seg .seg-btn").forEach(function (b) {
       b.classList.toggle("active", b.getAttribute("data-mode") === "pct");
     });
@@ -1127,6 +1158,37 @@
   $("#file-backdrop").addEventListener("click", function (e) {
     if (e.target === $("#file-backdrop")) closeFilePicker();
   });
+
+  // Advanced print settings (v1.0.18): only the fields the user touched
+  // are sent; absent keys keep the profile/model defaults.
+  function collectOverrides() {
+    var o = {};
+    var num = function (id) {
+      var e = $(id);
+      if (!e || e.value === "" || e.value === null) return null;
+      var v = parseFloat(e.value);
+      return isNaN(v) ? null : v;
+    };
+    var sel = function (id) {
+      var e = $(id);
+      return (e && e.value) || null;
+    };
+    var v;
+    if ((v = sel("#brim-select"))) o.brim_type = v;
+    if ((v = num("#brim-width-input")) !== null) o.brim_width = v;
+    if ((v = num("#flh-input")) !== null) o.first_layer_height = v;
+    if ((v = num("#fls-input")) !== null) o.first_layer_speed = v;
+    if ((v = num("#flt-input")) !== null) o.first_layer_temp = v;
+    var ir = $("#ironing-check");
+    if (ir && ir.checked) o.ironing = true;
+    if ((v = num("#top-shells-input")) !== null) o.top_shell_layers = v;
+    if ((v = sel("#top-pattern-select"))) o.top_surface_pattern = v;
+    if ((v = num("#infill-density-input")) !== null) o.infill_density = v;
+    if ((v = sel("#infill-pattern-select"))) o.infill_pattern = v;
+    if ((v = num("#wall-loops-input")) !== null) o.wall_loops = v;
+    if ((v = sel("#seam-select"))) o.seam_position = v;
+    return o;
+  }
 
   confirmStart.addEventListener("click", async function () {
     var m = state.modal;
@@ -1153,7 +1215,9 @@
         copies: Math.min(Math.max(parseInt(m.copies, 10) || 1, 1), 25),
         quality: $("#quality-select") ? $("#quality-select").value : "standard",
         timelapse: !!($("#timelapse-check") && $("#timelapse-check").checked),
-        supports: $("#supports-select") ? $("#supports-select").value : "model"
+        supports: $("#supports-select") ? $("#supports-select").value : "model",
+        overrides: collectOverrides(),
+        first_layer_check: !!($("#first-layer-check") && $("#first-layer-check").checked)
       })
     });
     confirmStart.disabled = false;

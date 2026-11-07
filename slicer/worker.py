@@ -6,15 +6,25 @@ DATA_DIR volume. Every 3s it atomically claims one job in `slicing` status and:
 
 1. Builds 4 filament JSONs from the stock U1 filament profile template,
    overriding filament_colour from the job plan's spool colors (material
-   matched to a stock template when one exists, else PLA).
-2. Runs the upstream OrcaSlicer CLI headless under xvfb:
+   matched to a stock template when one exists, else PLA). When the job
+   carries a first_layer_temp override, nozzle_temperature_initial_layer is
+   patched in all four (it is a filament key, not a process key).
+2. Builds the process profile for the job: the quality preset, plus the
+   supports mode and any per-job slicer overrides (brim, first-layer,
+   top-layer, infill, walls, seam) patched into a job-dir copy of the
+   profile -- the shared profile on disk is never mutated.
+3. Runs the upstream OrcaSlicer CLI headless under xvfb:
      xvfb-run -a /opt/orca/squashfs-root/AppRun --slice <plate+1>
        --load-settings "<machine>;<process>"
        --load-filaments "<f0>;<f1>;<f2>;<f3>"
        --outputdir <jobdir> <input.3mf>
-3. Parses time/filament estimates from CLI stdout + gcode comments
+4. When the job has the first-layer check on, inserts M400 + PAUSE just
+   before the second ";LAYER_CHANGE" marker so the print stops after layer
+   1; the backend monitor then snapshots the bed and alerts via ntfy, and
+   the print resumes only when the user taps Resume in the bridge.
+5. Parses time/filament estimates from CLI stdout + gcode comments
    (tolerant regexes; null when absent).
-4. On success -> status='uploading' (+gcode_path, estimates_json).
+6. On success -> status='uploading' (+gcode_path, estimates_json).
    On CLI crash (SIGSEGV / nonzero exit with extruder/config errors) ->
    rebuild a minimal 3MF and retry ONCE -> still failing -> status='failed'
    with the captured log. The claim is always released.
@@ -73,32 +83,87 @@ def process_profile_for(quality: str | None) -> str:
 
 SUPPORTS_MODES = ("model", "on", "off", "organic")
 
+# Per-job slicer overrides (v1.0.18). API key -> (OrcaSlicer process-profile
+# key, value formatter). Keys verified against the upstream Snapmaker U1
+# process profiles + OrcaSlicer v2.4.2 PrintConfig.cpp:
+#   brim_type: enum auto_brim/brim_ears/painted/outer_only/inner_only/
+#     outer_and_inner/no_brim (default auto_brim; key absent from the U1
+#     profile, so the slicer default applies unless patched here).
+#   brim_width, initial_layer_print_height ("first layer height"),
+#   initial_layer_speed ("first layer speed"), ironing_type ("no ironing" /
+#   "top" / "topmost" / "solid"), top_shell_layers, top_surface_pattern,
+#   sparse_infill_density (percent string, e.g. "25%"), sparse_infill_pattern,
+#   wall_loops, seam_position ("nearest"/"aligned"/"aligned_back"/"back"/
+#   "random"). All process-profile values are strings in the JSON.
+#   first_layer_temp is NOT a process key -- it is a FILAMENT key
+#   (nozzle_temperature_initial_layer, a per-extruder list of strings) and is
+#   patched into the per-job filament profiles by build_filament_profiles().
+OVERRIDE_TO_ORCA = {
+    "brim_type": ("brim_type", str),
+    "brim_width": ("brim_width", str),
+    "first_layer_height": ("initial_layer_print_height", str),
+    "first_layer_speed": ("initial_layer_speed", str),
+    "ironing": ("ironing_type", lambda v: "top" if v else "no ironing"),
+    "top_shell_layers": ("top_shell_layers", str),
+    "top_surface_pattern": ("top_surface_pattern", str),
+    "infill_density": ("sparse_infill_density", lambda v: f"{v}%"),
+    "infill_pattern": ("sparse_infill_pattern", str),
+    "wall_loops": ("wall_loops", str),
+    "seam_position": ("seam_position", str),
+}
 
-def process_profile_with_supports(job_dir: Path, quality: str | None,
-                                  supports_mode: str | None) -> str:
-    """Return the process profile path, applying a supports override.
+# First-layer check: OrcaSlicer emits one ";LAYER_CHANGE" comment line at the
+# start of every layer block (GCode.cpp process_layer, reserved tag verified
+# in GCodeProcessor.cpp: "LAYER_CHANGE"), first layer included. The pause
+# goes immediately before the SECOND marker, i.e. once layer 1 is done.
+LAYER_CHANGE_MARKER = ";LAYER_CHANGE"
 
-    mode "model" (default) leaves the profile untouched. "on"/"off"/"organic"
-    copies the profile into the job dir with enable_support forced (and
-    support_type=tree(auto) for "organic"), so the shared profile on disk is
-    never mutated.
+
+def process_profile_with_overrides(job_dir: Path, quality: str | None,
+                                   supports_mode: str | None = None,
+                                   overrides: dict | None = None) -> str:
+    """Return the process profile path, applying supports + per-job overrides.
+
+    mode "model" (default) and an empty overrides dict leave the shared
+    profile untouched. Otherwise the profile is copied into the job dir with
+    the patches applied, so the shared profile on disk is never mutated.
+    Unknown override keys are ignored (the API validates; this is belt and
+    braces for jobs created by older code paths).
     """
     base = process_profile_for(quality)
     mode = (supports_mode or "model").lower()
-    if mode not in SUPPORTS_MODES or mode == "model":
+    patches: dict[str, str] = {}
+    if mode in SUPPORTS_MODES and mode != "model":
+        if mode == "organic":
+            patches["enable_support"] = "1"
+            patches["support_type"] = "tree(auto)"
+        else:
+            patches["enable_support"] = "1" if mode == "on" else "0"
+    for key, value in (overrides or {}).items():
+        mapping = OVERRIDE_TO_ORCA.get(key)
+        if mapping is None:
+            continue
+        orca_key, fmt = mapping
+        try:
+            patches[orca_key] = fmt(value)
+        except Exception:
+            continue
+    if not patches:
         return base
     try:
         data = json.loads(Path(base).read_text())
     except Exception as exc:
         raise RuntimeError(f"could not read process profile {base}: {exc}") from exc
-    if mode == "organic":
-        data["enable_support"] = "1"
-        data["support_type"] = "tree(auto)"
-    else:
-        data["enable_support"] = "1" if mode == "on" else "0"
-    out = job_dir / f"process_supports_{mode}.json"
+    data.update(patches)
+    out = job_dir / "process_overrides.json"
     out.write_text(json.dumps(data, indent=2))
     return str(out)
+
+
+def process_profile_with_supports(job_dir: Path, quality: str | None,
+                                  supports_mode: str | None) -> str:
+    """Backwards-compatible wrapper: supports override only."""
+    return process_profile_with_overrides(job_dir, quality, supports_mode, None)
 OWNER = f"slicer-{os.getpid()}"
 
 LOG_CAP = 300
@@ -180,8 +245,16 @@ def _normalize_hex6(value: str | None) -> str:
     return v if re.fullmatch(r"[0-9A-F]{6}", v) else "808080"
 
 
-def build_filament_profiles(job_dir: Path, plan: list[dict], slot_spools: dict) -> list[str]:
-    """Write 4 filament JSONs (one per toolhead T0..T3). Returns paths."""
+def build_filament_profiles(job_dir: Path, plan: list[dict], slot_spools: dict,
+                            first_layer_temp: float | int | None = None) -> list[str]:
+    """Write 4 filament JSONs (one per toolhead T0..T3). Returns paths.
+
+    first_layer_temp (v1.0.18): first-layer nozzle temperature is a FILAMENT
+    key (nozzle_temperature_initial_layer, a per-extruder list of strings --
+    verified in the upstream Snapmaker PLA @U1 profile, ["220"]), so it is
+    patched here, not in the process profile. Applied to all four toolheads:
+    the first layer may print from any of them on a multi-color job.
+    """
     paths = []
     for slot in range(4):
         entry = next((e for e in plan if e.get("slot") == slot), None)
@@ -193,6 +266,8 @@ def build_filament_profiles(job_dir: Path, plan: list[dict], slot_spools: dict) 
         tpl = _template_for(material)
         tpl = dict(tpl)
         tpl["filament_colour"] = ["#" + _normalize_hex6(color)]
+        if first_layer_temp is not None:
+            tpl["nozzle_temperature_initial_layer"] = [str(first_layer_temp)]
         base_id = tpl.get("filament_settings_id") or tpl.get("name") or "filament"
         tpl["filament_settings_id"] = f"{base_id}_T{slot}"
         tpl["name"] = f"U1 Bridge T{slot} {(material or 'PLA')}"
@@ -200,6 +275,36 @@ def build_filament_profiles(job_dir: Path, plan: list[dict], slot_spools: dict) 
         out.write_text(json.dumps(tpl, indent=2))
         paths.append(str(out))
     return paths
+
+
+def insert_first_layer_pause(gcode_path: Path) -> bool:
+    """Insert M400 + PAUSE just before the second ";LAYER_CHANGE" marker,
+    i.e. once the first layer is fully printed. Returns True when inserted.
+
+    Returns False for a single-layer print (only one marker): there is no
+    layer 2 to pause before, so the check is meaningless. Raises
+    RuntimeError when no layer markers are found at all -- the G-code is
+    not OrcaSlicer output as expected, and silently skipping a check the
+    user explicitly asked for would be worse than failing loudly.
+    """
+    text = gcode_path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines(keepends=True)
+    markers = [i for i, ln in enumerate(lines) if ln.rstrip("\r\n") == LAYER_CHANGE_MARKER]
+    if not markers:
+        raise RuntimeError(
+            "first-layer check requested but no ';LAYER_CHANGE' markers found in "
+            "the sliced G-code; the slicer output format may have changed")
+    if len(markers) < 2:
+        return False  # single-layer print: nothing to pause after
+    pause_block = (
+        "; first-layer check (bridge): pause after layer 1\n"
+        "M400\n"
+        "PAUSE\n"
+    )
+    idx = markers[1]
+    lines.insert(idx, pause_block)
+    gcode_path.write_text("".join(lines), encoding="utf-8")
+    return True
 
 
 # ------------------------------------------------------------- estimates
@@ -829,8 +934,33 @@ def process_job(conn: sqlite3.Connection, job_id: str) -> None:
                 f"Slicing plate {plate + 1} of {row['plates']} on the U1 profiles...")
     quality = (row["quality"] or "standard")
     _append_log(conn, job_id, "info", f"Quality preset: {quality}.")
+    # Per-job slicer overrides (v1.0.18): validated by the API at confirm
+    # time and stored as JSON. first_layer_temp is filament-side, so it is
+    # split out here and patched into the filament profiles below.
+    overrides: dict = {}
     try:
-        filament_paths = build_filament_profiles(job_dir, plan, slot_spools)
+        overrides = json.loads(row["overrides_json"] or "{}") or {}
+        if not isinstance(overrides, dict):
+            overrides = {}
+    except (ValueError, TypeError, IndexError, KeyError):
+        overrides = {}
+    first_layer_temp = overrides.pop("first_layer_temp", None)
+    first_layer_check = False
+    try:
+        first_layer_check = bool(row["first_layer_check"])
+    except (IndexError, KeyError):
+        pass
+    if overrides:
+        _append_log(conn, job_id, "info",
+                    "Slicer overrides: " + ", ".join(
+                        f"{k}={v}" for k, v in sorted(overrides.items(),
+                                                       key=lambda kv: kv[0])) + ".")
+    if first_layer_temp is not None:
+        _append_log(conn, job_id, "info",
+                    f"First-layer temperature override: {first_layer_temp}°C.")
+    try:
+        filament_paths = build_filament_profiles(
+            job_dir, plan, slot_spools, first_layer_temp=first_layer_temp)
     except Exception as exc:
         _fail(conn, job_id, f"Could not build filament profiles: {exc}", "slice_failed")
         return
@@ -901,9 +1031,10 @@ def process_job(conn: sqlite3.Connection, job_id: str) -> None:
         _append_log(conn, job_id, "info",
                     f"Supports override: {supports_mode} (model file default ignored).")
     try:
-        proc_profile = process_profile_with_supports(job_dir, row["quality"], supports_mode)
+        proc_profile = process_profile_with_overrides(
+            job_dir, row["quality"], supports_mode, overrides)
     except Exception as exc:
-        _fail(conn, job_id, f"Could not apply supports setting: {exc}", "slice_failed")
+        _fail(conn, job_id, f"Could not apply slicer overrides: {exc}", "slice_failed")
         return
 
     ok, output, gcode, returncode = run_slice(
@@ -947,6 +1078,21 @@ def process_job(conn: sqlite3.Connection, job_id: str) -> None:
         except Exception as exc:
             _fail(conn, job_id, f"Tool remap failed ({exc}).", "slice_failed")
             return
+        if first_layer_check:
+            try:
+                if insert_first_layer_pause(gcode):
+                    _append_log(conn, job_id, "info",
+                                "First-layer check on: print will pause after layer 1 "
+                                "for your approval.")
+                else:
+                    _append_log(conn, job_id, "warning",
+                                "First-layer check on, but this is a single-layer "
+                                "print -- no pause inserted.")
+            except Exception as exc:
+                _fail(conn, job_id,
+                      f"Could not add the first-layer check pause ({exc}).",
+                      "slice_failed")
+                return
         if thumb_bytes and embed_gcode_thumbnails(gcode, thumb_bytes):
             _append_log(conn, job_id, "info",
                         "Embedded model preview thumbnails into G-code.")

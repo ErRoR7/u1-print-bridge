@@ -612,6 +612,45 @@ def _stitch_timelapse(conn, db_path: str, job_id: str) -> str | None:
     return str(out)
 
 
+def _maybe_first_layer_check(conn, db_path: str, job_id: str, row, print_stats: dict) -> None:
+    """Fire the first-layer check when the print pauses at the layer-1
+    boundary (v1.0.18).
+
+    The slicer inserts M400 + PAUSE just before layer 2, so the first pause
+    after printing starts IS the check pause -- except a pause during layer
+    2+ (print_stats.info.current_layer >= 2, per the U1 machine profile's
+    SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num+1}) means the window
+    already passed; that marks the check done silently instead of alerting
+    on a later layer. current_layer is 1 during the first layer, so a pause
+    with current_layer <= 1 (or unreported) is the check pause.
+    """
+    if not row["first_layer_check"] or row["first_layer_checked"]:
+        return
+    if (print_stats or {}).get("state") != "paused":
+        return
+    info = (print_stats or {}).get("info") or {}
+    current_layer = info.get("current_layer")
+    if isinstance(current_layer, (int, float)) and current_layer >= 2:
+        db.update_job(conn, job_id, first_layer_checked=1)
+        db.append_log(conn, job_id, "info",
+                      "First-layer check window passed without a pause; continuing.")
+        return
+    snap = _camera_snapshot()
+    snap_path = None
+    if snap:
+        snap_path = str(job_dir(db_path, job_id) / "first_layer.jpg")
+        Path(snap_path).write_bytes(snap)
+    db.update_job(conn, job_id, first_layer_checked=1, first_layer_pending=1,
+                  first_layer_snapshot_path=snap_path)
+    db.append_log(conn, job_id, "info",
+                  "First layer done — paused for your check.")
+    ntfy.notify(
+        config.NTFY_SERVER, config.NTFY_TOPIC, "first_layer_check",
+        {"id": job_id, "title": row["title"]},
+        bridge_url=config.BRIDGE_URL, attach_path=snap_path,
+    )
+
+
 def _poll_print(conn, db_path: str, job_id: str) -> None:
     """Poll Moonraker until the print completes/fails or the job is cancelled."""
     failures = 0
@@ -639,6 +678,15 @@ def _poll_print(conn, db_path: str, job_id: str) -> None:
             progress = status.get("virtual_sdcard", {}).get("progress", 0.0)
         db.update_job(conn, job_id, printer_state=state,
                           progress=round(float(progress or 0.0) * 100, 1))
+
+        # First-layer check (v1.0.18): the G-code pause at the layer-1
+        # boundary shows up here as state == "paused".
+        _maybe_first_layer_check(conn, db_path, job_id, row, ps)
+        if row["first_layer_pending"] and state == "printing":
+            # Resumed outside the bridge (e.g. Fluidd): clear the banner.
+            db.update_job(conn, job_id, first_layer_pending=0)
+            db.append_log(conn, job_id, "info",
+                          "First layer check cleared (print resumed).")
 
         if row["timelapse"]:
             _timelapse_tick(conn, db_path, job_id)

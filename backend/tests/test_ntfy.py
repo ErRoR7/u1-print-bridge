@@ -83,3 +83,11 @@ def test_build_message_material_mismatch():
     assert "material" in title.lower()
     assert "PETG" in body
     assert priority >= 4
+
+def test_build_message_first_layer_check():
+    title, body, tags, priority = ntfy.build_message(
+        "first_layer_check", {"title": "Owl"})
+    assert "first layer" in title.lower()
+    assert "Owl" in body
+    assert "resume" in body.lower()
+    assert priority >= 4

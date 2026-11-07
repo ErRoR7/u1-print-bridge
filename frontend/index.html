@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Print Bridge</title>
 <!-- Bump ?v= on every frontend release so browsers never mix old/new files. -->
-<link rel="stylesheet" href="styles.css?v=1.0.15">
+<link rel="stylesheet" href="styles.css?v=1.0.18">
 </head>
 <body>
 <header class="topbar">
@@ -110,6 +110,84 @@
       </div>
       <label class="check-row"><input type="checkbox" id="timelapse-check"> Record a timelapse of this print</label>
     </div>
+    <details id="advanced-row">
+      <summary>More print settings</summary>
+      <div class="adv-group">
+        <p class="adv-head">First layer</p>
+        <label class="field-label" for="brim-select">Brim</label>
+        <div class="row">
+          <select id="brim-select">
+            <option value="">As sliced</option>
+            <option value="no_brim">No brim</option>
+            <option value="outer_only">Outer brim</option>
+            <option value="outer_and_inner">Inner + outer brim</option>
+          </select>
+        </div>
+        <label class="field-label" for="brim-width-input">Brim width (mm)</label>
+        <input id="brim-width-input" type="number" min="0" max="100" step="1" placeholder="As sliced">
+        <label class="field-label" for="flh-input">First layer height (mm)</label>
+        <input id="flh-input" type="number" min="0.08" max="0.4" step="0.01" placeholder="As sliced">
+        <label class="field-label" for="fls-input">First layer speed (mm/s)</label>
+        <input id="fls-input" type="number" min="5" max="150" step="1" placeholder="As sliced">
+        <label class="field-label" for="flt-input">First layer temp (°C)</label>
+        <input id="flt-input" type="number" min="150" max="300" step="1" placeholder="As sliced">
+      </div>
+      <div class="adv-group">
+        <p class="adv-head">Top layer</p>
+        <label class="check-row"><input type="checkbox" id="ironing-check"> Iron the top surface (smoother top, slower print)</label>
+        <label class="field-label" for="top-shells-input">Top shell layers</label>
+        <input id="top-shells-input" type="number" min="1" max="15" step="1" placeholder="As sliced">
+        <label class="field-label" for="top-pattern-select">Top surface pattern</label>
+        <div class="row">
+          <select id="top-pattern-select">
+            <option value="">As sliced</option>
+            <option value="monotonic">Monotonic</option>
+            <option value="monotonicline">Monotonic line</option>
+            <option value="rectilinear">Rectilinear</option>
+            <option value="alignedrectilinear">Aligned rectilinear</option>
+            <option value="concentric">Concentric</option>
+            <option value="hilbertcurve">Hilbert curve</option>
+            <option value="archimedeanchords">Archimedean chords</option>
+            <option value="octagramspiral">Octagram spiral</option>
+          </select>
+        </div>
+      </div>
+      <div class="adv-group">
+        <p class="adv-head">Strength &amp; finish</p>
+        <label class="field-label" for="infill-density-input">Infill (%)</label>
+        <input id="infill-density-input" type="number" min="0" max="100" step="1" placeholder="As sliced">
+        <label class="field-label" for="infill-pattern-select">Infill pattern</label>
+        <div class="row">
+          <select id="infill-pattern-select">
+            <option value="">As sliced</option>
+            <option value="grid">Grid</option>
+            <option value="gyroid">Gyroid</option>
+            <option value="cubic">Cubic</option>
+            <option value="crosshatch">Crosshatch</option>
+            <option value="triangles">Triangles</option>
+            <option value="honeycomb">Honeycomb</option>
+            <option value="rectilinear">Rectilinear</option>
+            <option value="line">Line</option>
+            <option value="concentric">Concentric</option>
+            <option value="adaptivecubic">Adaptive cubic</option>
+            <option value="lightning">Lightning</option>
+          </select>
+        </div>
+        <label class="field-label" for="wall-loops-input">Wall loops (perimeters)</label>
+        <input id="wall-loops-input" type="number" min="1" max="10" step="1" placeholder="As sliced">
+        <label class="field-label" for="seam-select">Seam position</label>
+        <div class="row">
+          <select id="seam-select">
+            <option value="">As sliced</option>
+            <option value="aligned">Aligned</option>
+            <option value="nearest">Nearest</option>
+            <option value="back">Rear</option>
+            <option value="random">Random</option>
+          </select>
+        </div>
+      </div>
+      <label class="check-row"><input type="checkbox" id="first-layer-check"> Pause after the first layer so I can check it stuck</label>
+    </details>
     <div id="plate-row" hidden>
       <label class="field-label" for="plate-select">Which part?</label>
       <select id="plate-select"></select>
@@ -135,6 +213,6 @@
   </div>
 </div>
 
-<script src="app.js?v=1.0.15"></script>
+<script src="app.js?v=1.0.18"></script>
 </body>
 </html>

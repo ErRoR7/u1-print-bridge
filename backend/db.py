@@ -101,6 +101,12 @@ def open_db(path: str) -> sqlite3.Connection:
         ("timelapse_path", "TEXT"),
         ("supports_mode", "TEXT NOT NULL DEFAULT 'model'"),
         ("slot_toolheads_json", "TEXT NOT NULL DEFAULT '{}'"),
+        # v1.0.18: per-job slicer overrides (validated JSON) + first-layer check
+        ("overrides_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("first_layer_check", "INTEGER NOT NULL DEFAULT 0"),
+        ("first_layer_checked", "INTEGER NOT NULL DEFAULT 0"),
+        ("first_layer_pending", "INTEGER NOT NULL DEFAULT 0"),
+        ("first_layer_snapshot_path", "TEXT"),
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")

@@ -573,3 +573,106 @@ def test_toolheads_printer_fallback_without_locations(client, monkeypatch):
     assert th["T0"]["spool"]["id"] == 7
     assert th["T0"]["source"] == "printer"
     assert th["T0"]["mismatch"] is False
+
+# ------------------------------------------------- v1.0.18 overrides
+
+def test_confirm_overrides_ok(client, monkeypatch):
+    _mk_awaiting()
+    monkeypatch.setattr(moonraker, "preflight_state", lambda *a, **k: "standby")
+    overrides = {
+        "brim_type": "outer_only", "brim_width": 8,
+        "first_layer_height": 0.3, "first_layer_speed": 30,
+        "first_layer_temp": 230, "ironing": True,
+        "top_shell_layers": 6, "top_surface_pattern": "concentric",
+        "infill_density": 25, "infill_pattern": "gyroid",
+        "wall_loops": 3, "seam_position": "random",
+    }
+    r = client.post("/api/jobs/job1/confirm",
+                    json={"slot_spools": {}, "slot_toolheads": {"0": 0, "1": 1},
+                          "plate": 0, "overrides": overrides,
+                          "first_layer_check": True})
+    assert r.status_code == 202
+    job = r.json()["job"]
+    assert job["overrides"] == overrides
+    assert job["first_layer_check"] is True
+    assert job["first_layer_pending"] is False
+    assert job["first_layer_snapshot"] is None
+    # Stored verbatim in the DB for the slicer worker.
+    c = _db()
+    row = db.get_job(c, "job1")
+    assert json.loads(row["overrides_json"]) == overrides
+    assert row["first_layer_check"] == 1
+
+
+def test_confirm_overrides_absent_defaults(client, monkeypatch):
+    _mk_awaiting()
+    monkeypatch.setattr(moonraker, "preflight_state", lambda *a, **k: "standby")
+    r = client.post("/api/jobs/job1/confirm",
+                    json={"slot_spools": {}, "slot_toolheads": {"0": 0, "1": 1}, "plate": 0})
+    assert r.status_code == 202
+    assert r.json()["job"]["overrides"] == {}
+    assert r.json()["job"]["first_layer_check"] is False
+
+
+def test_confirm_bad_overrides_422(client, monkeypatch):
+    _mk_awaiting()
+    monkeypatch.setattr(moonraker, "preflight_state", lambda *a, **k: "standby")
+    base = {"slot_spools": {}, "slot_toolheads": {"0": 0, "1": 1}, "plate": 0}
+    bad_payloads = [
+        {"overrides": {"brim_type": "huge"}},
+        {"overrides": {"brim_width": 101}},
+        {"overrides": {"brim_width": "wide"}},
+        {"overrides": {"first_layer_height": 0.5}},
+        {"overrides": {"first_layer_height": 0.05}},
+        {"overrides": {"first_layer_speed": 200}},
+        {"overrides": {"first_layer_temp": 310}},
+        {"overrides": {"ironing": "yes"}},
+        {"overrides": {"top_shell_layers": 0}},
+        {"overrides": {"top_shell_layers": 1.5}},
+        {"overrides": {"top_surface_pattern": "swirly"}},
+        {"overrides": {"infill_density": 101}},
+        {"overrides": {"infill_pattern": "waffle"}},
+        {"overrides": {"wall_loops": 11}},
+        {"overrides": {"seam_position": "middle"}},
+        {"overrides": {"nozzle_temperature": 220}},
+        {"overrides": "all of them"},
+        {"first_layer_check": "yes"},
+    ]
+    for extra in bad_payloads:
+        r = client.post("/api/jobs/job1/confirm", json={**base, **extra})
+        assert r.status_code == 422, extra
+
+
+def test_new_columns_migrate(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(str(p))
+    c.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY)")
+    c.commit()
+    c.close()
+    conn = db.open_db(str(p))
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    for col in ("overrides_json", "first_layer_check", "first_layer_checked",
+                "first_layer_pending", "first_layer_snapshot_path"):
+        assert col in cols
+    conn.close()
+
+
+def test_resume_clears_first_layer_pending(client, monkeypatch):
+    c = _db()
+    db.create_job(c, "job1", title="Owl", source_url=None, source_type="upload",
+                  status="printing")
+    db.update_job(c, "job1", printer_state="paused", first_layer_pending=1)
+    monkeypatch.setattr(moonraker, "resume", lambda *a, **k: None)
+    r = client.post("/api/jobs/job1/resume")
+    assert r.status_code == 200
+    assert r.json()["job"]["first_layer_pending"] is False
+    row = db.get_job(_db(), "job1")
+    assert row["first_layer_pending"] == 0
+    assert any("First layer approved" in e["msg"] for e in json.loads(row["log_json"]))
+
+
+def test_first_layer_snapshot_404_when_none(client):
+    _mk_awaiting()
+    r = client.get("/api/jobs/job1/first-layer-snapshot")
+    assert r.status_code == 404

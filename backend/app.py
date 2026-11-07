@@ -58,6 +58,85 @@ QUALITY_LABELS = {
     "fine": "Fine (0.12mm)",
     "extrafine": "Extra fine (0.08mm — slowest)",
 }
+
+# Per-job slicer overrides (v1.0.18). Values are the OrcaSlicer enum strings,
+# verified against the upstream Snapmaker U1 process profiles and OrcaSlicer
+# v2.4.2 PrintConfig.cpp; the slicer worker maps API keys to profile keys.
+# Absent key = profile/model default. "rear" is the UI label for seam
+# position "back"; the frontend sends the enum value.
+BRIM_TYPES = {"no_brim", "outer_only", "outer_and_inner"}
+TOP_SURFACE_PATTERNS = {"monotonic", "monotonicline", "rectilinear",
+                        "alignedrectilinear", "concentric", "hilbertcurve",
+                        "archimedeanchords", "octagramspiral"}
+INFILL_PATTERNS = {"rectilinear", "alignedrectilinear", "zigzag", "crosszag",
+                   "lockedzag", "line", "grid", "triangles", "tri-hexagon",
+                   "cubic", "adaptivecubic", "quartercubic", "supportcubic",
+                   "lightning", "honeycomb", "3dhoneycomb", "lateral-honeycomb",
+                   "lateral-lattice", "crosshatch", "tpmsd", "tpmsfk",
+                   "gyroid", "concentric", "hilbertcurve", "archimedeanchords",
+                   "octagramspiral"}
+SEAM_POSITIONS = {"nearest", "aligned", "aligned_back", "back", "random"}
+_OVERRIDE_KEYS = {"brim_type", "brim_width", "first_layer_height",
+                  "first_layer_speed", "first_layer_temp", "ironing",
+                  "top_shell_layers", "top_surface_pattern", "infill_density",
+                  "infill_pattern", "wall_loops", "seam_position"}
+
+
+def _validate_overrides(body: dict) -> dict:
+    """Validate the optional `overrides` object from confirm. Returns a dict
+    of only the keys the user set. Raises HTTPException(422) on any bad
+    value, including unknown keys (a typo'd setting must not vanish)."""
+    raw = body.get("overrides")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "overrides must be an object")
+    bad = set(raw) - _OVERRIDE_KEYS
+    if bad:
+        raise HTTPException(422, f"unknown override(s): {sorted(bad)}")
+    out: dict = {}
+
+    def _num(key, lo, hi, integer=False):
+        v = raw.get(key)
+        if v is None:
+            return
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise HTTPException(422, f"{key} must be a number")
+        if integer:
+            if isinstance(v, float):
+                if not v.is_integer():
+                    raise HTTPException(422, f"{key} must be a whole number")
+                v = int(v)
+        if not (lo <= v <= hi):
+            raise HTTPException(422, f"{key} must be between {lo} and {hi}")
+        # Keep ints as ints (8 stays 8, not 8.0) so stored values and the
+        # patched profiles read cleanly; floats stay floats.
+        out[key] = int(v) if integer else v
+
+    def _enum(key, allowed):
+        v = raw.get(key)
+        if v is None:
+            return
+        if not isinstance(v, str) or v not in allowed:
+            raise HTTPException(422, f"{key} must be one of: {sorted(allowed)}")
+        out[key] = v
+
+    _enum("brim_type", BRIM_TYPES)
+    _num("brim_width", 0, 100)
+    _num("first_layer_height", 0.08, 0.4)
+    _num("first_layer_speed", 5, 150)
+    _num("first_layer_temp", 150, 300)
+    if raw.get("ironing") is not None:
+        if not isinstance(raw.get("ironing"), bool):
+            raise HTTPException(422, "ironing must be true or false")
+        out["ironing"] = raw["ironing"]
+    _num("top_shell_layers", 1, 15, integer=True)
+    _enum("top_surface_pattern", TOP_SURFACE_PATTERNS)
+    _num("infill_density", 0, 100, integer=True)
+    _enum("infill_pattern", INFILL_PATTERNS)
+    _num("wall_loops", 1, 10, integer=True)
+    _enum("seam_position", SEAM_POSITIONS)
+    return out
 # Overridable for Docker: mount the frontend at /app/frontend.
 FRONTEND_DIR = Path(os.environ.get("FRONTEND_DIR", Path(__file__).resolve().parent.parent / "frontend"))
 
@@ -154,6 +233,12 @@ def _job_dict(row) -> dict:
         "quality": row["quality"] or "standard",
         "timelapse": bool(row["timelapse"]),
         "supports": row["supports_mode"] or "model",
+        "overrides": json.loads(row["overrides_json"] or "{}"),
+        "first_layer_check": bool(row["first_layer_check"]),
+        "first_layer_pending": bool(row["first_layer_pending"]),
+        "first_layer_snapshot": (
+            f"/api/jobs/{row['id']}/first-layer-snapshot"
+            if row["first_layer_snapshot_path"] else None),
         "final_snapshot": f"/api/jobs/{row['id']}/snapshot" if row["final_snapshot_path"] else None,
         "timelapse_video": f"/api/jobs/{row['id']}/timelapse" if row["timelapse_path"] else None,
     }
@@ -390,6 +475,17 @@ def get_final_snapshot(job_id: str):
     return FileResponse(path, media_type="image/jpeg")
 
 
+@app.get("/api/jobs/{job_id}/first-layer-snapshot")
+def get_first_layer_snapshot(job_id: str):
+    """The camera photo taken when the print paused for the first-layer check."""
+    with conn() as c:
+        row = _get_job_or_404(c, job_id)
+        path = row["first_layer_snapshot_path"]
+    if not path or not Path(path).is_file():
+        raise HTTPException(404, "no first-layer snapshot")
+    return FileResponse(path, media_type="image/jpeg")
+
+
 @app.get("/api/jobs/{job_id}/timelapse")
 def get_timelapse(job_id: str):
     """The stitched timelapse MP4 (when the job had timelapse enabled)."""
@@ -487,6 +583,13 @@ def confirm_job(job_id: str, body: dict):
         if supports not in ("model", "on", "off", "organic"):
             raise HTTPException(422, "supports must be one of: model, on, off, organic")
 
+        # Per-job slicer overrides (v1.0.18): validated above; absent keys
+        # keep the profile/model defaults.
+        overrides = _validate_overrides(body)
+        first_layer_check = body.get("first_layer_check", False)
+        if not isinstance(first_layer_check, bool):
+            raise HTTPException(422, "first_layer_check must be true or false")
+
         # Fit check against the 270mm U1 bed (skipped when dims unknown).
         dims = json.loads(row["dimensions_json"] or "null")
         if dims:
@@ -552,7 +655,9 @@ def confirm_job(job_id: str, body: dict):
                       plate=plate, claimed_by=None,
                       scale_json=json.dumps(scale), copies=copies,
                       quality=quality, timelapse=1 if timelapse else 0,
-                      supports_mode=supports)
+                      supports_mode=supports,
+                      overrides_json=json.dumps(overrides),
+                      first_layer_check=1 if first_layer_check else 0)
         db.append_log(c, job_id, "info",
                       f"Confirmed: plate {plate + 1}, toolheads {slot_toolheads}. Queued for slicing.")
         return {"job": _job_dict(db.get_job(c, job_id))}
@@ -631,7 +736,11 @@ def resume_job(job_id: str):
         except moonraker.MoonrakerError as exc:
             raise HTTPException(502, f"printer resume failed: {exc}")
         db.update_job(c, job_id, printer_state="printing")
-        db.append_log(c, job_id, "info", "Resumed from the bridge.")
+        if row["first_layer_pending"]:
+            db.update_job(c, job_id, first_layer_pending=0)
+            db.append_log(c, job_id, "info", "First layer approved — resuming print.")
+        else:
+            db.append_log(c, job_id, "info", "Resumed from the bridge.")
         return {"job": _job_dict(db.get_job(c, job_id))}
 
 

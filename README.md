@@ -30,7 +30,11 @@ alongside — this compose file expects both directories to exist.
    review the picks and change any before starting. If a slot doesn't match,
    you can pick a different spool from a list — or physically load the right
    spool and update Spoolman. You can also set quality, scale/copies, and
-   force supports on or off here. A preview panel at the bottom renders an
+   force supports on or off here. "More print settings" (collapsed below the
+   Start button) holds per-job slicer tweaks — brim, first-layer height /
+   speed / temperature, ironing, top layers, infill, walls, seam — plus a
+   first-layer check that pauses the print after layer 1 so you can confirm
+   it stuck before it continues (see below). A preview panel at the bottom renders an
    isometric preview of the actual sliced toolpath in the colors you mapped,
    so you can see exactly how the print will look before starting. Each model
    color is also listed next to the toolhead you picked, so you can
@@ -193,7 +197,42 @@ Two free apps, about five minutes, one time:
    (started / complete / failed / paused, AI failure detection).
 2. **ntfy** — install the app and subscribe to the topic you put in
    `NTFY_TOPIC` (e.g. `u1-print-bridge`). Bridge alerts: download failed,
-   slicing failed, filament too low for the job, print finished.
+   slicing failed, filament too low for the job, first-layer check (photo of
+   layer 1, print paused for your approval), print finished.
+
+## More print settings (v1.0.18)
+
+On the color-check screen, "More print settings" is collapsed by default —
+everything in it is optional and defaults to the profile/model setting, so
+ignoring it changes nothing. When set, the bridge patches a copy of the
+process profile for that job only (the shared U1 profiles are never edited).
+
+- **First layer** — Brim (none / outer / inner+outer) + brim width in mm;
+  first-layer height (0.08–0.4 mm), first-layer speed (5–150 mm/s),
+  first-layer temperature (150–300 °C, patched into the filament profiles —
+  it is a filament setting in OrcaSlicer, not a process setting).
+- **Top layer** — Ironing on/off (smooths top surfaces, costs time); top
+  shell layers (1–15); top surface pattern (monotonic, monotonic line,
+  rectilinear, aligned rectilinear, concentric, Hilbert curve, Archimedean
+  chords, octagram spiral).
+- **Strength & finish** — Infill % (0–100) and pattern (grid, gyroid, cubic,
+  crosshatch, triangles, honeycomb, rectilinear, line, concentric, adaptive
+  cubic, lightning); wall loops / perimeters (1–10); seam position (aligned,
+  nearest, rear, random).
+- **First-layer check** — tick the box and the print pauses automatically
+  after layer 1 (the slicer inserts `M400` + `PAUSE` at the layer-1/2
+  boundary). The bridge snaps a photo of the bed, sends it to you via ntfy,
+  and shows it on the print card with a Resume button. Tap Resume if the
+  first layer stuck; tap Cancel if it didn't. If you resume from Fluidd
+  instead of the bridge, the banner clears itself. A single-layer print has
+  nothing to pause after, so the check is skipped with a note in the log.
+
+All OrcaSlicer setting keys were verified against the upstream Snapmaker U1
+profiles and OrcaSlicer v2.4.2 source (`brim_type`, `brim_width`,
+`initial_layer_print_height`, `initial_layer_speed`,
+`nozzle_temperature_initial_layer`, `ironing_type`, `top_shell_layers`,
+`top_surface_pattern`, `sparse_infill_density`, `sparse_infill_pattern`,
+`wall_loops`, `seam_position`).
 
 ## The color-slot model
 
