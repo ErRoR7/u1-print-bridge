@@ -4,8 +4,9 @@
 # - Fork's CLI segfaults on 3MF + --load-settings/--load-filaments (unfixable).
 # - Upstream v2.4.0 bundles U1 profiles (PR #14305) and handles 3MFs cleanly.
 # - Requires: Application metadata stripped from 3MF (segfault trigger),
-#   profiles flattened with inherits intact (compat check), cli_config.json
-#   patched with Snapmaker U1 (safety check).
+#   profiles flattened with inherits REMOVED (2.5.0 rejects --load-settings
+#   files that carry inherits), cli_config.json patched with Snapmaker U1
+#   (safety check).
 #
 # Asset verification (2026-10-10, via GitHub API):
 #   repo: OrcaSlicer/OrcaSlicer, tag: v2.4.0
@@ -99,14 +100,14 @@ RUN curl -fSL -o /tmp/orca.AppImage \
 # removed. The bridge only uses the Snapmaker-branded filaments.
 RUN git clone --depth 1 --branch ${ORCA_TAG} --filter=blob:none --sparse \
       https://github.com/OrcaSlicer/OrcaSlicer.git /tmp/orca-src \
-    && cd /tmp/orca-src && git sparse-checkout set resources/profiles/Snapmaker resources/profiles/Snapmaker.json \
+    && cd /tmp/orca-src && git sparse-checkout set resources/profiles/Snapmaker \
     && cp -r /tmp/orca-src/resources/profiles/Snapmaker/machine \
              /tmp/orca-src/resources/profiles/Snapmaker/process \
              /tmp/orca-src/resources/profiles/Snapmaker/filament \
              /opt/orca/squashfs-root/resources/profiles/Snapmaker/ \
-    && cp /tmp/orca-src/resources/profiles/Snapmaker.json \
-          /opt/orca/squashfs-root/resources/profiles/Snapmaker.json \
     && rm -rf /tmp/orca-src \
+    && curl -fSL -o /opt/orca/squashfs-root/resources/profiles/Snapmaker.json \
+          "https://raw.githubusercontent.com/OrcaSlicer/OrcaSlicer/${ORCA_TAG}/resources/profiles/Snapmaker.json" \
     && rm -f /opt/orca/squashfs-root/resources/profiles/Snapmaker/filament/Generic*.json \
     && rm -rf /opt/orca/squashfs-root/resources/profiles/Snapmaker/filament/Polymaker \
     && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/machine/Snapmaker U1 (0.4 nozzle).json" \
