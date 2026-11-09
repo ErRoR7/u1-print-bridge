@@ -49,7 +49,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ORCA_BIN=/opt/orca/squashfs-root/bin/orca-slicer \
     ORCA_MACHINE_PROFILE=/opt/orca/profiles/machine.json \
     ORCA_PROCESS_PROFILE=/opt/orca/profiles/process.json \
-    ORCA_FILAMENT_DIR=/opt/orca/profiles
+    ORCA_FILAMENT_DIR=/opt/orca/profiles \
+    ORCA_DATADIR=/opt/orca/datadir \
+    LD_LIBRARY_PATH=/opt/orca/squashfs-root/lib/orca-runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -86,17 +88,43 @@ RUN curl -fSL -o /tmp/orca.AppImage \
 # lay its machine/process/filament JSONs into the extracted AppImage's
 # resources/profiles/Snapmaker/, reconstructing the layout 2.4.2 shipped.
 # The flatten step below then works unchanged.
+# Also copy the vendor manifest (Snapmaker.json) — the CLI enumerates
+# vendors from <datadir>/system/<vendor>.json, not from directories.
+# PRUNE broken profiles (2026-11-09, verified against v2.5.0): the
+# filament/Generic*.json profiles inherit from "Generic <X> @System" (the
+# shared filament library, not in the Snapmaker tree) and
+# filament/Polymaker/*.json inherits from a missing "PolyTerra PLA @base".
+# Any one of these breaks the CLI's whole-vendor inheritance resolution
+# ("Failed to load presets for inheritance resolution"), so they are
+# removed. The bridge only uses the Snapmaker-branded filaments.
 RUN git clone --depth 1 --branch ${ORCA_TAG} --filter=blob:none --sparse \
       https://github.com/OrcaSlicer/OrcaSlicer.git /tmp/orca-src \
-    && cd /tmp/orca-src && git sparse-checkout set resources/profiles/Snapmaker \
+    && cd /tmp/orca-src && git sparse-checkout set resources/profiles/Snapmaker resources/profiles/Snapmaker.json \
     && cp -r /tmp/orca-src/resources/profiles/Snapmaker/machine \
              /tmp/orca-src/resources/profiles/Snapmaker/process \
              /tmp/orca-src/resources/profiles/Snapmaker/filament \
              /opt/orca/squashfs-root/resources/profiles/Snapmaker/ \
+    && cp /tmp/orca-src/resources/profiles/Snapmaker.json \
+          /opt/orca/squashfs-root/resources/profiles/Snapmaker.json \
     && rm -rf /tmp/orca-src \
+    && rm -f /opt/orca/squashfs-root/resources/profiles/Snapmaker/filament/Generic*.json \
+    && rm -rf /opt/orca/squashfs-root/resources/profiles/Snapmaker/filament/Polymaker \
     && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/machine/Snapmaker U1 (0.4 nozzle).json" \
     && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/process/0.20 Standard @Snapmaker U1 (0.4 nozzle).json" \
     && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/filament/Snapmaker PLA @U1.json"
+
+# --- CLI datadir (2.5.0): system preset bundle for headless slicing ---
+# 2.5.0's CLI loads system presets from <datadir>/system/ (NOT from the
+# AppImage resources, and NOT from the .opc caches in headless mode).
+# Without a datadir the bundle is empty (only "Default Printer/Setting/
+# Filament") and --load-settings fails with "Preset was not found in the
+# loaded bundle". The datadir mirrors the pruned Snapmaker tree above plus
+# the vendor manifest. The worker passes --datadir /opt/orca/datadir.
+RUN mkdir -p /opt/orca/datadir/system /opt/orca/datadir/user \
+    && cp /opt/orca/squashfs-root/resources/profiles/Snapmaker.json \
+          /opt/orca/datadir/system/Snapmaker.json \
+    && cp -r /opt/orca/squashfs-root/resources/profiles/Snapmaker \
+             /opt/orca/datadir/system/Snapmaker
 
 # --- Patch Bambu CLI safety config with Snapmaker U1 ---
 # Upstream's "check printer cli safe params" segfaults if the printer isn't
@@ -112,9 +140,10 @@ PYEOF
 
 # --- Flatten U1 profiles (vendor-aware inherits resolution) ---
 # Headless CLI cannot resolve "inherits" stubs reliably; flatten to explicit
-# profiles. KEEP the "inherits" key so the CLI populates the printer system
-# name (required for the -17 compat check). Fix the junk printer_settings_id
-# Snapmaker committed upstream ("MyToolChanger 0.4 nozzle - Copy").
+# profiles. The "inherits" key is DROPPED from the flattened output (2.5.0
+# rejects --load-settings files that carry it). Fix the junk
+# printer_settings_id Snapmaker committed upstream ("MyToolChanger 0.4
+# nozzle - Copy").
 RUN mkdir -p /opt/orca/profiles && python3 - << 'PYEOF'
 import json
 from pathlib import Path
@@ -154,7 +183,14 @@ def flatten(src_path, vendor="Snapmaker"):
     merged = {}
     for c in reversed(chain):
         merged.update(c)
-    # KEEP inherits for CLI system-name resolution; fix instantiation
+    # 2.5.0: DROP the "inherits" key. The CLI fails to parse a
+    # --load-settings file that carries one ("The input preset file is
+    # invalid and can not be parsed", return -5). The flattened profile is
+    # already fully merged, so nothing is lost. (2.4.2 tolerated inherits
+    # here for system-name resolution; the explicit printer_settings_id /
+    # compatible_printers fields set below cover that check instead.)
+    merged.pop("inherits", None)
+    # KEEP instantiation fix
     merged["instantiation"] = "true"
     merged["from"] = "user"
     # 2.5.0: fdm_filament_common.json sets filament_settings_id to [''] (a
@@ -165,6 +201,19 @@ def flatten(src_path, vendor="Snapmaker"):
         fsid = merged.get("filament_settings_id")
         if not isinstance(fsid, str) or not fsid.strip():
             merged["filament_settings_id"] = merged.get("name", "")
+        # 2.5.0: U1 filaments declare bed_type ['Hot Plate'], which is not
+        # a valid curr_bed_type enum value, so the CLI defaults to Cool
+        # Plate and rejects the filament ("Cool Plate does not support
+        # filament 1", return -61). The U1's plate is a heated PEI plate
+        # (machine default_bed_type is 'Textured PEI Plate'): remap Hot
+        # Plate to it, carrying the hot-plate temps across.
+        bt = merged.get("bed_type")
+        if isinstance(bt, list) and bt == ["Hot Plate"]:
+            merged["bed_type"] = ["Textured PEI Plate"]
+            for src, dst in (("hot_plate_temp", "textured_plate_temp"),
+                             ("hot_plate_temp_initial_layer", "textured_plate_temp_initial_layer")):
+                if merged.get(src) is not None:
+                    merged[dst] = merged[src]
     return merged
 
 B = bundle / "Snapmaker"
@@ -208,6 +257,9 @@ for name, src in jobs.items():
             if v not in cp:
                 cp.append(v)
         flat["compatible_printers"] = cp
+        # 2.5.0: pin the plate to the U1's heated PEI plate. The CLI
+        # defaults to Cool Plate, which the U1 filaments do not support.
+        flat["curr_bed_type"] = "Textured PEI Plate"
     (out / name).write_text(json.dumps(flat, indent=2))
     print(f"  {name}: {len(flat)} keys")
 if missing_required:

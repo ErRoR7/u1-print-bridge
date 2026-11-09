@@ -60,6 +60,7 @@ log = logging.getLogger("u1-slicer")
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "jobs.db"
 ORCA_BIN = os.environ.get("ORCA_BIN", "/opt/orca/squashfs-root/AppRun")
+ORCA_DATADIR = os.environ.get("ORCA_DATADIR", "/opt/orca/datadir")
 MACHINE_PROFILE = os.environ.get("ORCA_MACHINE_PROFILE", "/opt/orca/profiles/machine.json")
 PROCESS_PROFILE = os.environ.get("ORCA_PROCESS_PROFILE", "/opt/orca/profiles/process.json")
 FILAMENT_DIR = Path(os.environ.get("ORCA_FILAMENT_DIR", "/opt/orca/profiles"))
@@ -900,6 +901,7 @@ def run_slice(job_dir, input_path, plate, filament_paths, process_profile=None):
     proc_profile = process_profile or PROCESS_PROFILE
     cmd = [
         "xvfb-run", "-a", ORCA_BIN,
+        "--datadir", ORCA_DATADIR,  # 2.5.0: CLI loads system presets from <datadir>/system/
         "--allow-newer-file",  # tolerate 3MFs saved by newer slicers
         "--slice", str(plate + 1),  # job plate is 0-based; CLI is 1-based
         "--load-settings", f"{MACHINE_PROFILE};{proc_profile}",
