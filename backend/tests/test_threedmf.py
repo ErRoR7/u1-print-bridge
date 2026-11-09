@@ -20,6 +20,19 @@ from backend.threedmf import InspectorError, inspect
 
 SAMPLES = Path(os.environ.get("U1_3MF_SAMPLES", "/tmp/u1-3mf-samples"))
 
+
+def _sample(name):
+    """Return a real-sample path, or skip the test if it is absent.
+
+    The real samples live in /tmp/u1-3mf-samples, which is ephemeral and
+    does not survive VM replacements — skip cleanly instead of failing.
+    """
+    p = SAMPLES / name
+    if not p.exists():
+        pytest.skip(f"real sample {name} absent (no {SAMPLES})")
+    return p
+
+
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 # Minimal 1x1 PNG (opaque red) for synthetic thumbnails.
@@ -30,7 +43,7 @@ MINI_PNG = bytes.fromhex(
 
 
 def test_watchful_owl_palette_order_and_materials():
-    insp = inspect(SAMPLES / "watchful-owl.3mf")
+    insp = inspect(_sample("watchful-owl.3mf"))
     assert insp.kind == "3mf"
     assert [p["hex"] for p in insp.palette] == ["D3C5A3", "7C4B00", "FFFFFF", "000000"]
     assert [p["material"] for p in insp.palette] == ["PETG"] * 4
@@ -42,7 +55,7 @@ def test_watchful_owl_palette_order_and_materials():
 
 
 def test_parrot_u1_palette_alpha_stripped_and_two_plates():
-    insp = inspect(SAMPLES / "展翅鹦鹉【项目】U1.3mf")
+    insp = inspect(_sample("展翅鹦鹉【项目】U1.3mf"))
     assert [p["hex"] for p in insp.palette] == ["003776", "E72F1D", "FBFFDB", "F8F81C"]
     assert [p["material"] for p in insp.palette] == ["PLA"] * 4
     assert insp.extruders == [3]
@@ -54,7 +67,7 @@ def test_parrot_u1_palette_alpha_stripped_and_two_plates():
 
 def test_sea_slug_virtual_extruder_unsupported():
     with pytest.raises(InspectorError) as excinfo:
-        inspect(SAMPLES / "海蛞蝓【项目】U1  sea.3mf")
+        inspect(_sample("海蛞蝓【项目】U1  sea.3mf"))
     assert excinfo.value.code == "unsupported"
     assert "virtual" in str(excinfo.value).lower()
 

@@ -15,15 +15,21 @@
 # NOTE: the v2.4.2 asset name below follows the v2.4.0 pattern but was NOT
 # verified against the release assets (same trap as 2026-10-10). curl -fSL
 # fails the build loudly on a 404, so a wrong name surfaces at build time.
+# Bumped 2026-11-09 to v2.5.0 (bridge v1.0.19): asset name VERIFIED via
+# GitHub API (OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.0.AppImage,
+# 214571512 bytes, released 2026-11-07). Watch: Bambu process presets now
+# default to Grid infill (was Cross Hatch), and Filament-for-Features
+# "Default" now uses the object's own filament — validate via Tower test
+# slice after deploy.
 # Also check the build log for "WARN: unresolved inherits" (2.4.2 runs
 # profile checks for every brand by default).
 #   binary: squashfs-root/bin/orca-slicer (NOT AppRun -- AppRun is the GUI!)
 #   profiles: squashfs-root/resources/profiles/Snapmaker/{machine,process,filament}/
 FROM python:3.12-slim
 
-ARG ORCA_VERSION=2.4.2
-ARG ORCA_TAG=v2.4.2
-ARG ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage
+ARG ORCA_VERSION=2.5.0
+ARG ORCA_TAG=v2.5.0
+ARG ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.0.AppImage
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
