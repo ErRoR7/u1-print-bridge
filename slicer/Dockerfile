@@ -21,6 +21,18 @@
 # default to Grid infill (was Cross Hatch), and Filament-for-Features
 # "Default" now uses the object's own filament — validate via Tower test
 # slice after deploy.
+# 2.5.0 PROFILE CHANGE (2026-11-09): the AppImage no longer ships vendor
+# profile JSONs — resources/profiles/<vendor>/ holds assets only, and the
+# presets live in binary .opc caches (see docs/HLSD/preset-cache.md).
+# The bridge needs JSON (worker.py reads/patches them), so the build
+# sparse-checkouts resources/profiles/Snapmaker/ from the OrcaSlicer repo
+# at the same tag (v2.5.0) and lays the machine/process/filament JSONs into
+# the extracted AppImage's resources/profiles/Snapmaker/. All U1 inherits
+# chains resolve inside the Snapmaker tree (verified 2026-11-09: no
+# cross-vendor inherits, no missing profiles). The Orca Cloud profile-update
+# endpoint (check-version.orcaslicer.com/profile) only serves incremental
+# updates and returns "no profiles for this orca_version" for 2.5.0, so it
+# cannot supply the base profiles — the source repo is the canonical source.
 # Also check the build log for "WARN: unresolved inherits" (2.4.2 runs
 # profile checks for every brand by default).
 #   binary: squashfs-root/bin/orca-slicer (NOT AppRun -- AppRun is the GUI!)
@@ -51,7 +63,7 @@ RUN apt-get update \
        libatspi2.0-0 libcups2 libdrm2 libxcomposite1 libxdamage1 \
        libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
        libxfixes3 libx11-xcb1 libxcb-dri3-0 \
-       curl ca-certificates \
+       curl ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 # Pillow: resize 3MF thumbnails for G-code embedding (preview on U1 screen).
@@ -66,6 +78,25 @@ RUN curl -fSL -o /tmp/orca.AppImage \
     && /tmp/orca.AppImage --appimage-extract \
     && rm /tmp/orca.AppImage \
     && test -x /opt/orca/squashfs-root/bin/orca-slicer
+
+# --- Snapmaker U1 profile JSONs from the OrcaSlicer source (2.5.0) ---
+# 2.5.0 ships no vendor profile JSONs in the AppImage (assets only; presets
+# are .opc binary caches). The JSON sources live in the OrcaSlicer repo at
+# the same tag. Sparse-checkout just the Snapmaker vendor tree (~3 MB) and
+# lay its machine/process/filament JSONs into the extracted AppImage's
+# resources/profiles/Snapmaker/, reconstructing the layout 2.4.2 shipped.
+# The flatten step below then works unchanged.
+RUN git clone --depth 1 --branch ${ORCA_TAG} --filter=blob:none --sparse \
+      https://github.com/OrcaSlicer/OrcaSlicer.git /tmp/orca-src \
+    && cd /tmp/orca-src && git sparse-checkout set resources/profiles/Snapmaker \
+    && cp -r /tmp/orca-src/resources/profiles/Snapmaker/machine \
+             /tmp/orca-src/resources/profiles/Snapmaker/process \
+             /tmp/orca-src/resources/profiles/Snapmaker/filament \
+             /opt/orca/squashfs-root/resources/profiles/Snapmaker/ \
+    && rm -rf /tmp/orca-src \
+    && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/machine/Snapmaker U1 (0.4 nozzle).json" \
+    && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/process/0.20 Standard @Snapmaker U1 (0.4 nozzle).json" \
+    && test -f "/opt/orca/squashfs-root/resources/profiles/Snapmaker/filament/Snapmaker PLA @U1.json"
 
 # --- Patch Bambu CLI safety config with Snapmaker U1 ---
 # Upstream's "check printer cli safe params" segfaults if the printer isn't
@@ -126,6 +157,14 @@ def flatten(src_path, vendor="Snapmaker"):
     # KEEP inherits for CLI system-name resolution; fix instantiation
     merged["instantiation"] = "true"
     merged["from"] = "user"
+    # 2.5.0: fdm_filament_common.json sets filament_settings_id to [''] (a
+    # list holding an empty string). The worker derives filament_settings_id
+    # as name + _T<slot> and would render "['']_T0". Normalize to the
+    # profile name so the worker's fallback produces the 2.4.2 behaviour.
+    if merged.get("type") == "filament":
+        fsid = merged.get("filament_settings_id")
+        if not isinstance(fsid, str) or not fsid.strip():
+            merged["filament_settings_id"] = merged.get("name", "")
     return merged
 
 B = bundle / "Snapmaker"
