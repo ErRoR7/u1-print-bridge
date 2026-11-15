@@ -412,16 +412,21 @@ def _filament_check(conn, job_id: str, row) -> str | None:
     for entry in plan:
         slot = str(entry["slot"])
         spool_id = slot_spools.get(slot)
-        if spool_id is None:
-            continue
         need = by_tool.get(f"T{entry['slot']}")
         if need is None and len(plan) == 1 and total_g:
             need = total_g
         if need is None:
             continue
-        spool = live.get(spool_id) or entry.get("spool") or {}
+        # Spoolman id first; fall back to the plan entry's live spool
+        # snapshot (refreshed from the printer at confirm time). A slot
+        # with no spool id used to be skipped outright, so the check never
+        # ran when the mapping was empty.
+        spool = (live.get(spool_id) if spool_id is not None else None) \
+            or entry.get("spool") or {}
         remaining = spool.get("remaining_g")
-        if isinstance(remaining, (int, float)) and remaining < need:
+        if not isinstance(remaining, (int, float)):
+            continue  # no Spoolman remaining data for this slot; can't check
+        if remaining < need:
             return (
                 f"not enough filament: '{spool.get('name')}' at {entry['toolhead']} "
                 f"has {remaining:.0f} g but the slice needs ~{need:.0f} g"
@@ -461,12 +466,15 @@ def _material_check(conn, job_id: str, row) -> str | None:
     for entry in plan:
         slot = str(entry["slot"])
         spool_id = slot_spools.get(slot)
-        if spool_id is None:
-            continue
         required = entry.get("required_material")
         if not required:
             continue  # model declares no material (e.g. plain STL) -- nothing to check
-        spool = live.get(spool_id) or entry.get("spool") or {}
+        # Spoolman id first; fall back to the plan entry's live spool
+        # snapshot (printer toolhead state at confirm time). A slot with
+        # no spool id used to be skipped outright, so a clear material
+        # mismatch was never caught when the mapping was empty.
+        spool = (live.get(spool_id) if spool_id is not None else None) \
+            or entry.get("spool") or {}
         actual = spool.get("material")
         if not _materials_compatible(required, actual):
             return (

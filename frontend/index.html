@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Print Bridge</title>
 <!-- Bump ?v= on every frontend release so browsers never mix old/new files. -->
-<link rel="stylesheet" href="styles.css?v=1.0.18">
+<link rel="stylesheet" href="styles.css?v=1.0.20">
 </head>
 <body>
 <header class="topbar">
@@ -37,7 +37,7 @@
       <label class="btn file-btn" for="file-input">Choose a 3MF file</label>
       <span id="file-name" class="hint"></span>
     </div>
-    <input id="file-input" type="file" accept=".3mf" hidden>
+    <input id="file-input" type="file" accept=".3mf,.stl,.obj" hidden>
     <p class="hint">Upload a 3MF you saved from MakerWorld or another site.</p>
     <div id="upload-error" class="error" hidden></div>
   </section>
@@ -213,6 +213,6 @@
   </div>
 </div>
 
-<script src="app.js?v=1.0.18"></script>
+<script src="app.js?v=1.0.20"></script>
 </body>
 </html>

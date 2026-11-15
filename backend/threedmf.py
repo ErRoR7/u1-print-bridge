@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import xml.etree.ElementTree as ET
 import zipfile
 
 import numpy as np
@@ -51,8 +52,45 @@ MODEL_SETTINGS = "Metadata/model_settings.config"
 PLATE_JSON_RE = re.compile(r"^Metadata/plate_(\d+)\.json$")
 PLATE_PNG_RE = re.compile(r"^Metadata/plate_(\d+)\.png$")
 EXTRUDER_RE = re.compile(r'<metadata\s+key="extruder"\s+value="(\d+)"')
-_VERTEX_RE = re.compile(rb'<vertex\s+x="([^"]+)"\s+y="([^"]+)"\s+z="([^"]+)"\s*/>')
 _ASCII_VERTEX_RE = re.compile(rb"^\s*vertex\s+(\S+)\s+(\S+)\s+(\S+)", re.M)
+
+# Largest single ZIP member the inspector will unpack (200 MB). 3MF model
+# XML is a few MB at most; the cap stops a zip bomb (many GB of vertices
+# behind a small compressed file) from exhausting memory. ZipInfo.file_size
+# is the *decompressed* size, checked before any read.
+MAX_ZIP_MEMBER_BYTES = 200 * 1024 * 1024
+
+
+def _read_zip_member(zf: zipfile.ZipFile, name: str,
+                     max_bytes: int = MAX_ZIP_MEMBER_BYTES) -> bytes:
+    """Read one ZIP member, refusing entries whose declared uncompressed
+    size exceeds max_bytes. Raises InspectorError (user-facing)."""
+    info = zf.getinfo(name)
+    if info.file_size > max_bytes:
+        raise InspectorError(
+            f"3MF member {name!r} is {info.file_size / (1024 * 1024):.0f} MB "
+            f"(limit {max_bytes // (1024 * 1024)} MB) -- refusing to unpack it.")
+    return zf.read(name)
+
+
+def _local(tag) -> str:
+    """Element tag without its namespace: '{ns}vertex' -> 'vertex'."""
+    return tag.split("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _parse_model_xml(data: bytes) -> ET.Element:
+    """Parse a 3D/*.model document with ElementTree.
+
+    Elements are matched by local name (namespace/prefix-independent) and
+    attributes are read by name, so vertex parsing no longer depends on
+    attribute order (the old regex required x=".." y=".." z=".." exactly).
+    DTDs are rejected outright: std-lib ET does not expand external
+    entities, but a DTD with internal entities enables billion-laughs
+    expansion on an untrusted model file.
+    """
+    if b"<!doctype" in data.lower():
+        raise ValueError("3MF model XML contains a DOCTYPE")
+    return ET.fromstring(data)
 
 # U1 build volume (mm). Used to sanity-check scale/copy requests.
 BED_X, BED_Y, BED_Z = 270.0, 270.0, 270.0
@@ -82,8 +120,6 @@ class Inspection:
     volumes: dict[int, float] = field(default_factory=dict)  # 1-based extruder -> cm^3
 
 
-_OBJECT_RE = re.compile(rb'<object\b[^>]*\bid="(\d+)"[^>]*>(.*?)</object>', re.S)
-_TRIANGLE_RE = re.compile(rb'<triangle\s+v1="(\d+)"\s+v2="(\d+)"\s+v3="(\d+)"')
 _OBJECT_EXTRUDER_RE = re.compile(
     rb'<object\b[^>]*\bid="(\d+)"[^>]*>.*?<metadata\s+key="extruder"\s+value="(\d+)"',
     re.S)
@@ -111,28 +147,43 @@ def estimate_volumes(path: str | Path) -> dict[int, float]:
         if not model_name:
             return vols
         try:
-            data = zf.read(model_name)
-        except KeyError:
+            data = _read_zip_member(zf, model_name)
+            root = _parse_model_xml(data)
+        except (KeyError, ValueError, InspectorError):
             return vols
         # object id -> extruder (1-based) from Bambu/Orca model settings
         extruder_by_object: dict[int, int] = {}
         if MODEL_SETTINGS in names:
             try:
-                cfg = zf.read(MODEL_SETTINGS)
+                cfg = _read_zip_member(zf, MODEL_SETTINGS)
                 for m in _OBJECT_EXTRUDER_RE.finditer(cfg):
                     extruder_by_object[int(m.group(1))] = int(m.group(2))
-            except KeyError:
+            except (KeyError, InspectorError):
                 pass
-        for om in _OBJECT_RE.finditer(data):
-            oid = int(om.group(1))
-            body = om.group(2)
-            verts = [(float(m.group(1)), float(m.group(2)), float(m.group(3)))
-                     for m in _VERTEX_RE.finditer(body)]
-            if not verts:
+        for obj in root.iter():
+            if _local(obj.tag) != "object":
                 continue
-            tris = [(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                    for m in _TRIANGLE_RE.finditer(body)]
-            if not tris:
+            try:
+                oid = int(obj.get("id"))
+            except (TypeError, ValueError):
+                continue
+            verts: list[tuple[float, float, float]] = []
+            tris: list[tuple[int, int, int]] = []
+            for el in obj.iter():
+                tag = _local(el.tag)
+                if tag == "vertex":
+                    try:
+                        verts.append((float(el.get("x")), float(el.get("y")),
+                                      float(el.get("z"))))
+                    except (TypeError, ValueError):
+                        continue
+                elif tag == "triangle":
+                    try:
+                        tris.append((int(el.get("v1")), int(el.get("v2")),
+                                     int(el.get("v3"))))
+                    except (TypeError, ValueError):
+                        continue
+            if not verts or not tris:
                 continue
             try:
                 v = np.asarray(verts, dtype=np.float64)
@@ -186,19 +237,26 @@ def _bbox_from_points(pts: list[tuple[float, float, float]]) -> dict | None:
 
 
 def _bbox_3mf(zf: zipfile.ZipFile) -> dict | None:
-    """Union bounding-box size of all 3D/*.model vertices (object space)."""
+    """Union bounding-box size of all 3D/*.model vertices (object space).
+
+    A model file that fails to parse is skipped (dimensions are advisory;
+    the slicer is the authority) rather than failing the inspection.
+    """
     pts: list[tuple[float, float, float]] = []
     for name in zf.namelist():
         if not (name.startswith("3D/") and name.endswith(".model")):
             continue
         try:
-            data = zf.read(name)
-        except KeyError:
+            data = _read_zip_member(zf, name)
+            root = _parse_model_xml(data)
+        except (KeyError, ValueError, InspectorError):
             continue
-        for m in _VERTEX_RE.finditer(data):
+        for el in root.iter():
+            if _local(el.tag) != "vertex":
+                continue
             try:
-                pts.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
-            except ValueError:
+                pts.append((float(el.get("x")), float(el.get("y")), float(el.get("z"))))
+            except (TypeError, ValueError):
                 continue
     return _bbox_from_points(pts)
 
@@ -276,7 +334,7 @@ def inspect(path: str | Path) -> Inspection:
 
         thumbnail = None
         if "Metadata/plate_1.png" in names:
-            thumbnail = zf.read("Metadata/plate_1.png")
+            thumbnail = _read_zip_member(zf, "Metadata/plate_1.png")
 
         if PROJECT_SETTINGS not in names:
             # Bare export (e.g. exported from CAD): single-color "as modeled".
@@ -288,11 +346,11 @@ def inspect(path: str | Path) -> Inspection:
                 dimensions=dimensions,
             )
 
-        palette = _parse_palette(zf.read(PROJECT_SETTINGS))
+        palette = _parse_palette(_read_zip_member(zf, PROJECT_SETTINGS))
 
         extruders: list[int] = []
         if MODEL_SETTINGS in names:
-            xml = zf.read(MODEL_SETTINGS).decode("utf-8", "replace")
+            xml = _read_zip_member(zf, MODEL_SETTINGS).decode("utf-8", "replace")
             extruders = _parse_extruders(xml)
             _check_extruders(extruders)  # raises for virtual/mixed extruders
 

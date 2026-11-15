@@ -4,6 +4,47 @@ One button on a phone → multi-color print on the Snapmaker U1. Paste a model
 link (or upload a 3MF), check the color→slot mapping,
 tap Start print. No slicer knowledge needed.
 
+## Changelog
+
+### v1.0.20 — security & reliability fixes (2026-11-15)
+
+All findings from an independent code review of v1.0.19, fixed:
+
+- **MakerWorld session-cookie leak (High):** model-source routing used a
+  substring match on `makerworld.com`, so a crafted link could send your
+  session cookie to an attacker's host. Routing now checks the parsed
+  hostname (exact domain or subdomain only).
+- **Unauthenticated API + SSRF (High):** downloads now validate every URL
+  (including redirect hops) against public-IP resolution — RFC1918,
+  loopback, link-local and other non-public targets are refused. Optional
+  bearer auth: set `BRIDGE_API_TOKEN` to require it on all API routes
+  except `/api/health` (the web UI keeps working via an HttpOnly cookie).
+- **Filament/material checks bypassed (High):** the confirm endpoint
+  overwrote the proposed Spoolman mapping with the frontend's empty
+  `slot_spools: {}`, so both pre-print checks always skipped, and the
+  slicer ignored the printer's live toolhead data. Confirm now keeps the
+  proposed mapping when the caller sends none, the checks fall back to
+  the live spool snapshot, and filament profiles use it directly.
+- **Slicer build fragility (High):** the Dockerfile now creates the
+  Snapmaker profile directory before copying into it, and profile
+  flattening fails the build on an unresolved `inherits` instead of
+  shipping a half-merged profile with only a warning.
+- **Size limits (Medium):** uploads and downloads capped at 200 MB;
+  ZIP members are checked against their declared decompressed size
+  before unpacking (zip-bomb guard).
+- **3MF vertex parsing (Medium):** model XML is now parsed with
+  ElementTree (attributes by name, DTDs rejected) instead of a regex
+  that required `x=".." y=".." z=".."` in exact order.
+- **Stale slicing claim (Medium):** the slicer worker releases `slicing`
+  jobs still claimed by a dead slicer process on startup, instead of
+  leaving them stuck forever.
+- **Converter exposure (Medium):** the compose file no longer publishes
+  the converter's unauthenticated port on the host; the API reaches it
+  over Compose DNS as before. (Unraid deployment unchanged.)
+- **Cache-bust + extensions (Low):** frontend asset versions bumped to
+  1.0.20; file pickers and the attach endpoint now accept `.3mf`, `.stl`
+  and `.obj`, matching the upload endpoint.
+
 This repo holds the **frontend** (vanilla HTML/CSS/JS, no build step) plus the
 **deployment files** (`docker-compose.yml`, `.env.example`). The backend
 (FastAPI, in `backend/`) and the slicer worker image (in `slicer/`) are built

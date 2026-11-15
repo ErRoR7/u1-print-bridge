@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import hmac
 import logging
 import os
 import shutil
@@ -33,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -187,6 +188,31 @@ app = FastAPI(title="U1 Print Bridge", version=config.VERSION, lifespan=lifespan
 _supervisor_stop = threading.Event()
 
 
+# ------------------------------------------------------------------ auth
+# Optional bearer auth (v1.0.20): off by default (BRIDGE_API_TOKEN empty =
+# LAN-only trust, as before). When a token is configured, every /api/*
+# route except /api/health requires it, as an Authorization: Bearer header
+# or the HttpOnly bridge_auth cookie the web UI receives on page load (so
+# the UI keeps working with no login screen). /api/health stays open so
+# the Docker healthcheck keeps working without a token.
+# The token is also the cookie value: anyone who can load the UI on the
+# LAN can read it from the page load, so this gates API clients and any
+# future exposure beyond the LAN, not LAN browsers themselves.
+@app.middleware("http")
+async def _require_auth(request: Request, call_next):
+    token = config.BRIDGE_API_TOKEN
+    if token and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        presented = ""
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            presented = auth[7:].strip()
+        elif request.cookies.get("bridge_auth"):
+            presented = request.cookies["bridge_auth"]
+        if not presented or not hmac.compare_digest(presented, token):
+            return JSONResponse(status_code=401, content={"detail": "authentication required"})
+    return await call_next(request)
+
+
 @contextmanager
 def conn():
     c = db.open_db(str(Path(config.DATA_DIR) / "jobs.db"))
@@ -293,6 +319,31 @@ def _valid_url(url: str) -> bool:
         return False
 
 
+# Largest accepted upload (same 200 MB cap as downloads in fetchers.py).
+# Uploads arrive multipart; this caps what is written to the job dir.
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+
+def _save_upload_capped(src, dest: Path, limit: int = MAX_UPLOAD_BYTES) -> None:
+    """Copy an uploaded file to dest, aborting (and deleting the partial
+    file) when it exceeds `limit` bytes."""
+    total = 0
+    try:
+        with dest.open("wb") as fh:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise HTTPException(
+                        413, f"upload exceeds the {limit // (1024 * 1024)} MB limit")
+                fh.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+
+
 @app.post("/api/jobs", status_code=201)
 def create_job(body: dict):
     source_url = (body.get("source_url") or "").strip()
@@ -340,8 +391,7 @@ async def upload_job(file: UploadFile = File(...)):
     jdir = Path(config.DATA_DIR) / "jobs" / job_id
     jdir.mkdir(parents=True, exist_ok=True)
     dest = jdir / f"upload{ext}"
-    with dest.open("wb") as fh:
-        shutil.copyfileobj(file.file, fh)
+    _save_upload_capped(file.file, dest)
     with conn() as c:
         db.create_job(
             c, job_id, title=Path(name).stem, source_url=None, source_type="upload",
@@ -502,8 +552,8 @@ def get_timelapse(job_id: str):
 async def attach_file(job_id: str, file: UploadFile = File(...)):
     name = file.filename or "upload"
     ext = Path(name).suffix.lower()
-    if ext not in (".3mf", ".stl"):
-        raise HTTPException(422, "only .3mf or .stl files are accepted here")
+    if ext not in (".3mf", ".stl", ".obj"):
+        raise HTTPException(422, "only .3mf, .stl or .obj files are accepted here")
     with conn() as c:
         row = _get_job_or_404(c, job_id)
         if not (row["status"] == "failed" and row["error_code"] == "needs_file"):
@@ -511,8 +561,7 @@ async def attach_file(job_id: str, file: UploadFile = File(...)):
         jdir = Path(config.DATA_DIR) / "jobs" / job_id
         jdir.mkdir(parents=True, exist_ok=True)
         dest = jdir / f"manual{ext}"
-        with dest.open("wb") as fh:
-            shutil.copyfileobj(file.file, fh)
+        _save_upload_capped(file.file, dest)
         db.update_job(c, job_id, input_path=str(dest), title=Path(name).stem)
     db_path = str(Path(config.DATA_DIR) / "jobs.db")
     threading.Thread(target=workers.rerun_inspect, args=(db_path, job_id), daemon=True).start()
@@ -534,6 +583,15 @@ def confirm_job(job_id: str, body: dict):
         if not isinstance(plate, int) or not (0 <= plate < row["plates"]):
             raise HTTPException(422, f"plate must be an int in 0..{row['plates'] - 1}")
         slot_spools = body.get("slot_spools") or {}
+        # The frontend always sends {} here: it maps palette slots to
+        # physical toolheads, not to Spoolman spool ids. An empty mapping
+        # used to overwrite the proposed Spoolman mapping from inspection,
+        # which silently disabled the filament/material checks (they read
+        # slot_spools_json and skip slots with no spool id). So when the
+        # caller sends nothing, keep the proposed mapping; an explicit
+        # non-empty mapping from the caller still wins.
+        if not slot_spools:
+            slot_spools = json.loads(row["slot_spools_json"] or "{}")
         if not isinstance(slot_spools, dict):
             raise HTTPException(422, "slot_spools must be an object")
         slot_toolheads = body.get("slot_toolheads") or {}
@@ -889,6 +947,12 @@ if FRONTEND_DIR.is_dir():
         if request.url.path.endswith((".html", "/")):
             resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             resp.headers["Pragma"] = "no-cache"
+            # When API auth is configured, hand the browser the bearer
+            # token as an HttpOnly cookie so the UI's same-origin fetches
+            # (credentials: "same-origin") authenticate with no login step.
+            if config.BRIDGE_API_TOKEN:
+                resp.set_cookie("bridge_auth", config.BRIDGE_API_TOKEN,
+                                httponly=True, samesite="lax", path="/")
         return resp
 
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

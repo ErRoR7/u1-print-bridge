@@ -36,8 +36,15 @@ class Config:
     DATA_DIR: str = _env("DATA_DIR", "/data")
     # Public base URL of this bridge, used for ntfy deep links; omit when empty
     BRIDGE_URL: str = _env("BRIDGE_URL", "")
+    # Optional bearer token for the API (v1.0.20). Empty (default) = LAN-only
+    # trust, no auth, as before. When set, every /api/* route except
+    # /api/health requires `Authorization: Bearer <token>` (or the
+    # HttpOnly bridge_auth cookie the web UI gets on page load, so the UI
+    # keeps working). Set it if the bridge is ever exposed beyond trusted
+    # devices on the LAN.
+    BRIDGE_API_TOKEN: str = _env("BRIDGE_API_TOKEN", "")
 
-    VERSION: str = "1.0.19"
+    VERSION: str = "1.0.20"
 
     @classmethod
     def refresh(cls) -> None:
@@ -50,6 +57,7 @@ class Config:
         cls.CONVERTER_URL = _env("CONVERTER_URL", "")
         cls.DATA_DIR = _env("DATA_DIR", "/data")
         cls.BRIDGE_URL = _env("BRIDGE_URL", "")
+        cls.BRIDGE_API_TOKEN = _env("BRIDGE_API_TOKEN", "")
 
 
 config = Config

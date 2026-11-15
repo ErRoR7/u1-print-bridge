@@ -39,10 +39,13 @@ services:
   # Bambu/MakerWorld 3MF -> U1 converter (optional). The api calls it over
   # HTTP when CONVERTER_URL is set; with no converter the bridge just uses
   # the original file. Prebuilt upstream image, no build step.
+  # No ports mapping on purpose (v1.0.20): the converter has no auth and
+  # the api already reaches it at http://converter:8080 via Compose DNS,
+  # so exposing it on every host interface (8084) only widened the attack
+  # surface. (The Unraid template keeps its own 8084 mapping, where the
+  # api reaches it via the host IP -- that deployment is unchanged.)
   converter:
     image: ghcr.io/thadius83/bambu-to-snapmaker-u1:latest
-    ports:
-      - "8084:8080"
     restart: unless-stopped
 
 volumes:

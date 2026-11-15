@@ -119,6 +119,9 @@
   }
   async function apiJson(path, opts) {
     opts = opts || {};
+    // Send the HttpOnly bridge_auth cookie on same-origin calls (only set
+    // when BRIDGE_API_TOKEN is configured; harmless otherwise).
+    opts.credentials = "same-origin";
     var resp;
     try {
       resp = await fetch(path, opts);
@@ -551,7 +554,7 @@
     actions.appendChild(btn("Remove", "remove", id, "danger"));
     // hidden file input for "Attach the 3MF file"
     var fi = document.createElement("input");
-    fi.type = "file"; fi.accept = ".3mf"; fi.hidden = true;
+    fi.type = "file"; fi.accept = ".3mf,.stl,.obj"; fi.hidden = true;
     fi.dataset.jobId = id;
     fi.addEventListener("change", function () { attachFile(id, fi); });
     actions.appendChild(fi);

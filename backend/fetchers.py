@@ -19,20 +19,82 @@ Downloaded files land in the job dir as model.3mf / model.stl.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+import socket
 import time
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 log = logging.getLogger("u1-bridge.fetchers")
 
 PRINTABLES_GQL = "https://api.printables.com/graphql/"
+
+# Largest single download the bridge will accept (applies to every download
+# path: direct links, Printables/MakerWorld file links, presigned S3 URLs).
+# A 3MF/STL for the U1 is tens of MB at most; 200 MB leaves ample headroom
+# while capping an unbounded download or a decompression-bomb payload.
+MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
+_MAX_REDIRECTS = 5
+
+
+def _host_is(url: str, *domains: str) -> bool:
+    """True when url's hostname is exactly one of `domains` or a subdomain
+    of one. A substring match is NOT enough: a URL like
+    https://attacker.tld/?makerworld.com must never route to the MakerWorld
+    downloader (which sends the session cookie to the URL's host)."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _check_url_public(url: str) -> None:
+    """SSRF guard for user-controlled download URLs.
+
+    Rejects non-http(s) URLs and any URL whose host resolves to a
+    non-globally-routable address (RFC1918, loopback, link-local,
+    multicast, reserved, unspecified). Every resolved address must be
+    public: a hostname with mixed public/private answers is rejected.
+
+    NOTE on TOCTOU: the address is checked here and httpx resolves the
+    host again when connecting, so a DNS-rebinding answer could in theory
+    slip a private IP past this check. Fully pinning the connection to the
+    validated address is out of scope for this LAN-only tool; this check
+    still blocks the realistic SSRF vector (a crafted model link pointing
+    the bridge at a LAN service).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise FetchError("URL must be an http(s) URL.")
+    host = parsed.hostname
+    try:
+        addrs = [str(ipaddress.ip_address(host))]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror as exc:
+            raise FetchError(f"Could not resolve {host} ({exc}).") from exc
+        addrs = sorted({info[4][0] for info in infos})
+    for addr in addrs:
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            raise FetchError(f"Refusing to fetch {host}: unparsable address {addr!r}.")
+        if not ip.is_global:
+            raise FetchError(
+                f"Refusing to fetch {host}: it resolves to a non-public address ({addr})."
+            )
 PRINTABLES_MODEL_RE = re.compile(r"printables\.com/model/(\d+)", re.I)
-MAKERWORLD_RE = re.compile(r"makerworld\.com", re.I)
+# NOTE: there is deliberately no bare "makerworld.com" substring regex here.
+# Routing uses _host_is() on the parsed hostname instead (see below): a
+# substring match would send the session cookie to any host that merely
+# mentions makerworld.com in its path or query string.
 # /models/{designId}-{slug} with an optional #profileId-{instanceId} fragment
 # (or ?profileId= query). The fragment id is the *instance* id, which is what
 # the f3mf download endpoint expects -- not the numeric profileId inside the
@@ -113,12 +175,37 @@ def _gql(query: str, variables: dict, timeout: float = 20.0) -> dict:
     return data["data"]
 
 
-def _download_stream(url: str, dest: Path, timeout: float = 120.0) -> None:
-    with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as resp:
-        resp.raise_for_status()
-        with dest.open("wb") as fh:
-            for chunk in resp.iter_bytes(65536):
-                fh.write(chunk)
+def _download_stream(url: str, dest: Path, timeout: float = 120.0,
+                     max_bytes: int = MAX_DOWNLOAD_BYTES) -> None:
+    """Stream a URL to disk with a size cap and an SSRF guard.
+
+    Redirects are followed manually (up to _MAX_REDIRECTS) so every hop's
+    URL is checked with _check_url_public before it is fetched; httpx's
+    follow_redirects=True would fetch a redirect target unchecked.
+    """
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        _check_url_public(current)
+        with httpx.stream("GET", current, timeout=timeout, follow_redirects=False) as resp:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("location")
+                if not loc:
+                    resp.raise_for_status()
+                current = urljoin(current, loc)
+                continue
+            resp.raise_for_status()
+            total = 0
+            with dest.open("wb") as fh:
+                for chunk in resp.iter_bytes(65536):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        dest.unlink(missing_ok=True)
+                        raise FetchError(
+                            f"Download exceeds the {max_bytes // (1024 * 1024)} MB limit."
+                        )
+                    fh.write(chunk)
+            return
+    raise FetchError("Too many redirects.")
 
 
 def list_printables_files(url: str, delay: float = 2.0) -> tuple[str, list[dict]]:
@@ -313,6 +400,11 @@ def _download_makerworld_legacy(url: str, job_dir: Path, session_cookie: str = "
     Modern MakerWorld pages are a Next.js shell with no download hrefs, so
     this rarely succeeds; it is kept for older/simple pages.
     """
+    if not _host_is(url, "makerworld.com"):
+        # Never send the session cookie to a host that merely mentions
+        # MakerWorld in its path/query (see _host_is). Routing should have
+        # caught this in detect_source_type; this is defense in depth.
+        raise NeedsManualUpload()
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
     if session_cookie:
         headers["Cookie"] = session_cookie
@@ -379,9 +471,9 @@ def download_direct(url: str, job_dir: Path) -> tuple[Path, str]:
 
 
 def detect_source_type(url: str) -> str:
-    if PRINTABLES_MODEL_RE.search(url):
+    if _host_is(url, "printables.com") and PRINTABLES_MODEL_RE.search(url):
         return "printables"
-    if MAKERWORLD_RE.search(url):
+    if _host_is(url, "makerworld.com"):
         return "makerworld"
     return "other"
 

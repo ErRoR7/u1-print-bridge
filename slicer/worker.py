@@ -50,6 +50,7 @@ import re
 import sqlite3
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -255,13 +256,18 @@ def build_filament_profiles(job_dir: Path, plan: list[dict], slot_spools: dict,
     verified in the upstream Snapmaker PLA @U1 profile, ["220"]), so it is
     patched here, not in the process profile. Applied to all four toolheads:
     the first layer may print from any of them on a multi-color job.
+
+    slot_spools is kept for call compatibility but no longer gates the
+    live spool data: the plan entries carry the spool snapshot refreshed
+    from the printer at confirm time, and gating on the mapping meant the
+    snapshot was ignored whenever the mapping was empty (which was always
+    -- the frontend sends {}), so profiles silently fell back to the
+    model's required color/material instead of what is actually loaded.
     """
     paths = []
     for slot in range(4):
         entry = next((e for e in plan if e.get("slot") == slot), None)
-        spool = None
-        if entry and str(slot) in slot_spools:
-            spool = entry.get("spool") or None
+        spool = (entry or {}).get("spool") or None
         material = (spool or {}).get("material") or (entry or {}).get("required_material")
         color = (spool or {}).get("color_hex") or (entry or {}).get("required_hex")
         tpl = _template_for(material)
@@ -418,7 +424,7 @@ def sanitize_3mf(src: Path, dest: Path) -> None:
                 )
                 if not keep:
                     continue
-                content = zin.read(n)
+                content = _read_zip_member(zin, n)
                 if n == "3D/3dmodel.model":
                     content = _METADATA_RE.sub(b"", content)
                     content = _METADATA_PAIR_RE.sub(b"", content)
@@ -463,6 +469,8 @@ def extract_3mf_thumbnail(src: Path) -> bytes | None:
             if not imgs:
                 return None
             best = max(imgs, key=lambda n: z.getinfo(n).file_size)
+            if z.getinfo(best).file_size > MAX_ZIP_MEMBER_BYTES:
+                return None
             return z.read(best)
     except Exception:
         return None
@@ -711,44 +719,97 @@ def extract_preview_points(gcode_path: Path, dest: Path) -> bool:
 _BED_X = _BED_Y = _BED_Z = 270.0
 _COPY_GAP = 8.0  # mm clearance between copies on the bed
 
-_VERT_RE = re.compile(rb'<vertex\s+x="([^"]+)"\s+y="([^"]+)"\s+z="([^"]+)"(\s*/>)')
-_OBJECT_RE = re.compile(rb'<object\s[^>]*\bid="(\d+)"[^>]*>(.*?)</object>', re.S)
+# Largest single ZIP member the worker will unpack (200 MB). Same cap as
+# the backend inspector: a zip bomb (GBs of vertices behind a small file)
+# must not exhaust memory. ZipInfo.file_size is the *decompressed* size,
+# checked before any read.
+MAX_ZIP_MEMBER_BYTES = 200 * 1024 * 1024
+
+# Keep the 3MF core namespace unprefixed when re-serializing model XML
+# (matches how slicers write it); other namespaces get nsN: prefixes,
+# which is still valid XML with the same URIs.
+ET.register_namespace("", "http://schemas.microsoft.com/3dmanufacturing/core/2015/02")
+
+
+def _read_zip_member(zin: zipfile.ZipFile, name: str,
+                     max_bytes: int = MAX_ZIP_MEMBER_BYTES) -> bytes:
+    """Read one ZIP member, refusing entries whose declared uncompressed
+    size exceeds max_bytes."""
+    info = zin.getinfo(name)
+    if info.file_size > max_bytes:
+        raise ValueError(
+            f"3MF member {name!r} is {info.file_size / (1024 * 1024):.0f} MB "
+            f"(limit {max_bytes // (1024 * 1024)} MB) -- refusing to unpack it.")
+    return zin.read(name)
+
+
+def _local(tag) -> str:
+    """Element tag without its namespace: '{ns}vertex' -> 'vertex'."""
+    return tag.split("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _parse_model_xml(data: bytes) -> ET.Element:
+    """Parse a 3D/*.model document. Elements are matched by local name and
+    attributes by name, so vertex parsing no longer depends on attribute
+    order. DTDs are rejected outright (billion-laughs guard on untrusted
+    model files)."""
+    if b"<!doctype" in data.lower():
+        raise ValueError("3MF model XML contains a DOCTYPE")
+    return ET.fromstring(data)
+
+
 _ITEM_RE = re.compile(r'<item\b([^>]*?)/>')
 _OBJECTID_RE = re.compile(r'objectid="(\d+)"')
 _TRANSFORM_RE = re.compile(r'transform="([^"]+)"')
 
 
 def scale_3mf(src: Path, dest: Path, sx: float, sy: float, sz: float) -> None:
-    """Copy a 3MF scaling all model vertices by (sx, sy, sz)."""
-    def _scale(m: re.Match) -> bytes:
-        try:
-            x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
-        except ValueError:
-            return m.group(0)
-        return (f'<vertex x="{x * sx:.3f}" y="{y * sy:.3f}" '
-                f'z="{z * sz:.3f}"{m.group(4).decode()}').encode()
+    """Copy a 3MF scaling all model vertices by (sx, sy, sz).
 
+    Vertices are scaled through ElementTree (attributes read by name), so
+    the parse no longer depends on attribute order or on vertices having
+    exactly three attributes -- a reordered or extended <vertex> used to
+    be silently skipped by the old regex.
+    """
     with zipfile.ZipFile(src) as zin, \
             zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
         for n in zin.namelist():
-            data = zin.read(n)
+            data = _read_zip_member(zin, n)
             if n.startswith("3D/") and n.endswith(".model"):
-                data = _VERT_RE.sub(_scale, data)
+                root = _parse_model_xml(data)
+                for el in root.iter():
+                    if _local(el.tag) != "vertex":
+                        continue
+                    try:
+                        el.set("x", f"{float(el.get('x')) * sx:.3f}")
+                        el.set("y", f"{float(el.get('y')) * sy:.3f}")
+                        el.set("z", f"{float(el.get('z')) * sz:.3f}")
+                    except (TypeError, ValueError):
+                        continue
+                data = ET.tostring(root, encoding="UTF-8", xml_declaration=True)
             zout.writestr(n, data)
 
 
 def _parse_object_bboxes(model_xml: bytes) -> dict[int, tuple]:
     """object id -> (minx, miny, minz, maxx, maxy, maxz) in object space."""
     out: dict[int, tuple] = {}
-    for m in _OBJECT_RE.finditer(model_xml):
-        oid = int(m.group(1))
+    root = _parse_model_xml(model_xml)
+    for obj in root.iter():
+        if _local(obj.tag) != "object":
+            continue
+        try:
+            oid = int(obj.get("id"))
+        except (TypeError, ValueError):
+            continue
         mins = [float("inf")] * 3
         maxs = [float("-inf")] * 3
         n = 0
-        for vm in _VERT_RE.finditer(m.group(2)):
+        for el in obj.iter():
+            if _local(el.tag) != "vertex":
+                continue
             try:
-                v = (float(vm.group(1)), float(vm.group(2)), float(vm.group(3)))
-            except ValueError:
+                v = (float(el.get("x")), float(el.get("y")), float(el.get("z")))
+            except (TypeError, ValueError):
                 continue
             n += 1
             for i in range(3):
@@ -792,14 +853,27 @@ def arrange_copies(src: Path, dest: Path, copies: int) -> dict:
     """
     with zipfile.ZipFile(src) as zin:
         names = zin.namelist()
-        others = {n: zin.read(n) for n in names if n != "3D/3dmodel.model"}
-        model_xml = zin.read("3D/3dmodel.model")
+        # Cap the total unpacked size of the non-model members as well as
+        # each member: reading them all into a dict is the zip-bomb vector.
+        others: dict[str, bytes] = {}
+        others_total = 0
+        for n in names:
+            if n == "3D/3dmodel.model":
+                continue
+            data = _read_zip_member(zin, n)
+            others_total += len(data)
+            if others_total > MAX_ZIP_MEMBER_BYTES:
+                raise ValueError(
+                    f"3MF non-model members total over {MAX_ZIP_MEMBER_BYTES // (1024 * 1024)} MB "
+                    "-- refusing to unpack them.")
+            others[n] = data
+        model_xml = _read_zip_member(zin, "3D/3dmodel.model")
 
     bboxes: dict[int, tuple] = {}
     with zipfile.ZipFile(src) as zin:
         for n in names:
             if n.startswith("3D/") and n.endswith(".model"):
-                bboxes.update(_parse_object_bboxes(zin.read(n)))
+                bboxes.update(_parse_object_bboxes(_read_zip_member(zin, n)))
 
     build_m = re.search(r"<build>(.*?)</build>", model_xml.decode("utf-8", "replace"), re.S)
     if not build_m:
@@ -1127,6 +1201,34 @@ def _fail(conn: sqlite3.Connection, job_id: str, error: str, code: str) -> None:
     log.warning("job %s failed [%s]", job_id, code)
 
 
+def _release_stale_slicing_claims() -> None:
+    """Release 'slicing' jobs still claimed by a previous slicer process.
+
+    If this worker (re)starts while a job sits in status='slicing' with a
+    claimed_by like 'slicer-<old pid>', the previous worker is gone and
+    the job would sit stuck forever: the API's restart_recovery only runs
+    when the *API* container boots, not when the slicer restarts alone.
+    Releasing the claim (rather than failing the job) lets this worker
+    re-claim and re-slice it within seconds; slicing is idempotent and
+    overwrites the partial artifacts. Only slicer-owned claims are
+    touched, and only at startup, so a live claim can never be stolen.
+    """
+    try:
+        conn = _db()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM jobs WHERE status='slicing' AND claimed_by LIKE 'slicer-%'"
+            ).fetchall()
+            for row in rows:
+                _set(conn, row["id"], claimed_by=None)
+                log.warning("released stale slicing claim on job %s (slicer restarted)",
+                            row["id"])
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("stale slicing-claim release failed")
+
+
 def main() -> None:
     for name, path in (("machine profile", MACHINE_PROFILE), ("process profile", PROCESS_PROFILE),
                        ("orca binary", ORCA_BIN)):
@@ -1134,6 +1236,8 @@ def main() -> None:
             log.error("missing %s: %s -- check the Docker build / env", name, path)
     if not DB_PATH.is_file():
         log.error("jobs DB not found at %s; is DATA_DIR shared with the backend?", DB_PATH)
+    else:
+        _release_stale_slicing_claims()
     log.info("slicer worker started (db=%s)", DB_PATH)
     while True:
         try:

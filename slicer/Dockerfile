@@ -34,8 +34,9 @@
 # endpoint (check-version.orcaslicer.com/profile) only serves incremental
 # updates and returns "no profiles for this orca_version" for 2.5.0, so it
 # cannot supply the base profiles — the source repo is the canonical source.
-# Also check the build log for "WARN: unresolved inherits" (2.4.2 runs
-# profile checks for every brand by default).
+# flatten() below FAILS the build on any unresolved inherits (v1.0.20): a
+# profile that inherits from a missing base used to ship half-merged with
+# only a WARN in the log.
 #   binary: squashfs-root/bin/orca-slicer (NOT AppRun -- AppRun is the GUI!)
 #   profiles: squashfs-root/resources/profiles/Snapmaker/{machine,process,filament}/
 FROM python:3.12-slim
@@ -101,6 +102,7 @@ RUN curl -fSL -o /tmp/orca.AppImage \
 RUN git clone --depth 1 --branch ${ORCA_TAG} --filter=blob:none --sparse \
       https://github.com/OrcaSlicer/OrcaSlicer.git /tmp/orca-src \
     && cd /tmp/orca-src && git sparse-checkout set resources/profiles/Snapmaker \
+    && mkdir -p /opt/orca/squashfs-root/resources/profiles/Snapmaker \
     && cp -r /tmp/orca-src/resources/profiles/Snapmaker/machine \
              /tmp/orca-src/resources/profiles/Snapmaker/process \
              /tmp/orca-src/resources/profiles/Snapmaker/filament \
@@ -175,8 +177,14 @@ def flatten(src_path, vendor="Snapmaker"):
         pn = cur["inherits"]
         pp = find_profile(pn, vendor)
         if not pp or pn in seen:
-            print(f"  WARN: unresolved inherits '{pn}'")
-            break
+            # Fail the build rather than shipping a half-merged profile:
+            # an unresolved (or cyclic) inherits used to print a WARN and
+            # keep going, leaving the flattened profile missing base keys.
+            # All U1 inherits currently resolve inside the Snapmaker tree,
+            # so this only fires if a future profile set regresses.
+            raise SystemExit(
+                f"unresolved inherits '{pn}' in {src_path} -- refusing to "
+                "flatten an incomplete profile")
         pd = json.loads(pp.read_text())
         chain.append(pd)
         seen.add(pn)
