@@ -6,6 +6,16 @@ tap Start print. No slicer knowledge needed.
 
 ## Changelog
 
+### v1.0.21 — OrcaSlicer 2.5.1 (2026-11-16)
+
+- **Slicer upgrade:** OrcaSlicer 2.5.0 → 2.5.1 (maintenance release,
+  Nov 14). Per-nozzle settings can now be copied to every tool of a
+  toolchanger (was disabled beyond 2 extruders — directly relevant to
+  the 4-toolhead U1), plus prime-tower, CLI flushing-volume and AMF
+  security fixes. Same profile mechanism as 2.5.0 (sparse-checkout
+  from the v2.5.1 tag); validate with a Tower test slice after deploy.
+- Frontend asset versions bumped to 1.0.21.
+
 ### v1.0.20 — security & reliability fixes (2026-11-15)
 
 All findings from an independent code review of v1.0.19, fixed:

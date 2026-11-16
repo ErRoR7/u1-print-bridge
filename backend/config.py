@@ -44,7 +44,7 @@ class Config:
     # devices on the LAN.
     BRIDGE_API_TOKEN: str = _env("BRIDGE_API_TOKEN", "")
 
-    VERSION: str = "1.0.20"
+    VERSION: str = "1.0.21"
 
     @classmethod
     def refresh(cls) -> None:

@@ -22,6 +22,13 @@
 # default to Grid infill (was Cross Hatch), and Filament-for-Features
 # "Default" now uses the object's own filament — validate via Tower test
 # slice after deploy.
+# Bumped 2026-11-16 to v2.5.1 (bridge v1.0.21): maintenance update on
+# 2.5.0, asset name VERIFIED on the release page
+# (OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.1.AppImage, released
+# 2026-11-14). Toolchanger per-nozzle copy now works beyond 2 tools
+# (U1-relevant), plus prime-tower, CLI flushing-volume and AMF security
+# fixes. Same 2.5.0 profile mechanism (sparse-checkout at the tag);
+# validate via Tower test slice after deploy.
 # 2.5.0 PROFILE CHANGE (2026-11-09): the AppImage no longer ships vendor
 # profile JSONs — resources/profiles/<vendor>/ holds assets only, and the
 # presets live in binary .opc caches (see docs/HLSD/preset-cache.md).
@@ -41,9 +48,9 @@
 #   profiles: squashfs-root/resources/profiles/Snapmaker/{machine,process,filament}/
 FROM python:3.12-slim
 
-ARG ORCA_VERSION=2.5.0
-ARG ORCA_TAG=v2.5.0
-ARG ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.0.AppImage
+ARG ORCA_VERSION=2.5.1
+ARG ORCA_TAG=v2.5.1
+ARG ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.5.1.AppImage
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
