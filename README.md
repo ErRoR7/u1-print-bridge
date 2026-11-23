@@ -6,6 +6,19 @@ tap Start print. No slicer knowledge needed.
 
 ## Changelog
 
+### v1.0.22 — OrcaSlicer 2.5.2 (2026-11-23)
+
+- **Slicer upgrade:** OrcaSlicer 2.5.1 → 2.5.2 (maintenance release).
+  Fixes slicing crashes present since 2.5.0 — including a CLI crash on
+  an empty first layer with a prime tower — and STEP files importing
+  with faces missing. U1 profile change at this tag: rod clearance now
+  uses Snapmaker's own CAD measurements (Height to rod 27.5 → 26 mm,
+  Distance to rod 41.2 mm), so print-by-object plates can be refused
+  when a 26–27.5 mm object shares a Y band with a later object. Same
+  profile mechanism as 2.5.x (sparse-checkout from the v2.5.2 tag);
+  validate with a Tower test slice after deploy.
+- Frontend asset versions bumped to 1.0.22.
+
 ### v1.0.21 — OrcaSlicer 2.5.1 (2026-11-16)
 
 - **Slicer upgrade:** OrcaSlicer 2.5.0 → 2.5.1 (maintenance release,
